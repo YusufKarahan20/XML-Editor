@@ -1,13 +1,16 @@
+"""
+XML Analyzer — Entry Point
+"""
+
 import sys
-from PyQt6.QtWidgets import QApplication, QMainWindow
+from PyQt6.QtWidgets import QApplication
+from GUI.main_window import MainWindow
 
 
 def main():
     app = QApplication(sys.argv)
 
-    window = QMainWindow()
-    window.setWindowTitle("XML Editor")
-    window.resize(1200, 800)
+    window = MainWindow()
     window.show()
 
     sys.exit(app.exec())

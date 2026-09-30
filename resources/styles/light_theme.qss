@@ -1,0 +1,399 @@
+/* ============================================================
+   XML Analyzer — Professional Light Theme
+   resources/styles/light_theme.qss
+
+   Neutral light palette with subtle warm grays.
+   Accent: muted gold (#b8960c) for interactive highlights.
+   ============================================================ */
+
+/* ---------- Global ---------- */
+* {
+    font-family: "Segoe UI", "Inter", "Roboto", sans-serif;
+    font-size: 13px;
+}
+
+QMainWindow {
+    background-color: #f0f0f0;
+    color: #1e1e1e;
+}
+
+QWidget {
+    background-color: #f0f0f0;
+    color: #1e1e1e;
+}
+
+/* ---------- Menu Bar ---------- */
+QMenuBar {
+    background-color: #e8e8e8;
+    color: #1e1e1e;
+    border-bottom: 1px solid #c8c8c8;
+    padding: 2px 0;
+}
+
+QMenuBar::item {
+    padding: 5px 12px;
+    border-radius: 3px;
+}
+
+QMenuBar::item:selected {
+    background-color: #d4d4d4;
+}
+
+QMenuBar::item:pressed {
+    background-color: #c0c0c0;
+}
+
+QMenu {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    padding: 4px 0;
+}
+
+QMenu::item {
+    padding: 6px 28px 6px 20px;
+}
+
+QMenu::item:selected {
+    background-color: #e8e8e8;
+    border-radius: 3px;
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #d8d8d8;
+    margin: 4px 10px;
+}
+
+/* ---------- Toolbar ---------- */
+QToolBar {
+    background-color: #e8e8e8;
+    border-bottom: 1px solid #c8c8c8;
+    padding: 3px 6px;
+    spacing: 4px;
+}
+
+QToolBar::separator {
+    width: 1px;
+    background-color: #c8c8c8;
+    margin: 4px 6px;
+}
+
+QToolButton {
+    background-color: transparent;
+    color: #1e1e1e;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+QToolButton:hover {
+    background-color: #d4d4d4;
+    border-color: #c0c0c0;
+}
+
+QToolButton:pressed {
+    background-color: #c0c0c0;
+}
+
+/* ---------- Splitter ---------- */
+QSplitter::handle {
+    background-color: #d0d0d0;
+}
+
+QSplitter::handle:horizontal {
+    width: 2px;
+}
+
+QSplitter::handle:vertical {
+    height: 2px;
+}
+
+QSplitter::handle:hover {
+    background-color: #b8960c;
+}
+
+/* ---------- Tree View (general — XML Tree panel) ---------- */
+QTreeView {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    padding: 2px;
+    outline: 0;
+    selection-background-color: #dce7f5;
+    selection-color: #1e1e1e;
+}
+
+QTreeView::item {
+    padding: 3px 2px;
+}
+
+QTreeView::item:hover {
+    background-color: #f0f4fa;
+}
+
+QTreeView::item:selected {
+    background-color: #dce7f5;
+    color: #1e1e1e;
+}
+
+/* ---------- XML Grid (objectName: xmlGridView) ---------- */
+QTreeView#xmlGridView {
+    background-color: #ffffff;
+    alternate-background-color: #f7f7f7;
+    color: #1e1e1e;
+    border: 1px solid #b0b0b0;
+    border-radius: 4px;
+    padding: 0;
+    outline: 0;
+    selection-background-color: #d6e4f0;
+    selection-color: #1e1e1e;
+}
+
+QTreeView#xmlGridView::item {
+    padding: 4px 8px;
+    border-bottom: 1px solid #e0e0e0;
+    border-right: 1px solid #e0e0e0;
+}
+
+QTreeView#xmlGridView::item:hover {
+    background-color: #edf2f7;
+}
+
+QTreeView#xmlGridView::item:selected {
+    background-color: #cddcec;
+    color: #1e1e1e;
+}
+
+/* ---------- Header View ---------- */
+QHeaderView::section {
+    background-color: #e2e2e2;
+    color: #404040;
+    border: none;
+    border-bottom: 2px solid #b0b0b0;
+    border-right: 1px solid #c8c8c8;
+    padding: 6px 10px;
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+QHeaderView::section:last {
+    border-right: none;
+}
+
+/* ---------- Table View (kept for any future flat tables) ---------- */
+QTableView {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    padding: 0;
+    gridline-color: #d8d8d8;
+    outline: 0;
+    selection-background-color: #dce7f5;
+    selection-color: #1e1e1e;
+}
+
+QTableView::item {
+    padding: 4px 8px;
+}
+
+QTableView::item:hover {
+    background-color: #f0f4fa;
+}
+
+QTableView::item:selected {
+    background-color: #dce7f5;
+    color: #1e1e1e;
+}
+
+/* ---------- Text Edit / JSON Preview ---------- */
+QPlainTextEdit, QTextEdit {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
+    font-size: 13px;
+    selection-background-color: #cddcec;
+    selection-color: #1e1e1e;
+}
+
+/* ---------- Line Edit (Search) ---------- */
+QLineEdit {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #b8b8b8;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+    selection-background-color: #cddcec;
+    selection-color: #1e1e1e;
+}
+
+QLineEdit:focus {
+    border-color: #b8960c;
+}
+
+QLineEdit::placeholder {
+    color: #909090;
+}
+
+/* ---------- Push Buttons ---------- */
+QPushButton {
+    background-color: #e2e2e2;
+    color: #1e1e1e;
+    border: 1px solid #b8b8b8;
+    border-radius: 4px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background-color: #d4d4d4;
+    border-color: #a0a0a0;
+}
+
+QPushButton:pressed {
+    background-color: #c0c0c0;
+}
+
+QPushButton:disabled {
+    background-color: #ececec;
+    color: #a0a0a0;
+    border-color: #d0d0d0;
+}
+
+/* ---------- Status Bar ---------- */
+QStatusBar {
+    background-color: #e0e0e0;
+    color: #505050;
+    border-top: 1px solid #c8c8c8;
+    font-size: 12px;
+    padding: 2px 8px;
+}
+
+QStatusBar QLabel {
+    color: #505050;
+    padding: 0 8px;
+    background-color: transparent;
+}
+
+/* ---------- Panel Header Labels (objectName: panelHeader) ---------- */
+QLabel#panelHeader {
+    font-size: 11px;
+    font-weight: 700;
+    color: #606060;
+    letter-spacing: 1px;
+    padding: 4px 2px;
+    background: transparent;
+}
+
+/* ---------- Group Box ---------- */
+QGroupBox {
+    background-color: #f0f0f0;
+    border: 1px solid #c8c8c8;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding-top: 14px;
+    font-weight: 600;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 2px 8px;
+    color: #606060;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ---------- Scroll Bar ---------- */
+QScrollBar:vertical {
+    background-color: #f0f0f0;
+    width: 10px;
+    margin: 0;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #c0c0c0;
+    min-height: 30px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #a8a8a8;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar:horizontal {
+    background-color: #f0f0f0;
+    height: 10px;
+    margin: 0;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #c0c0c0;
+    min-width: 30px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #a8a8a8;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+/* ---------- Tab Widget (future use) ---------- */
+QTabWidget::pane {
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    background-color: #f0f0f0;
+}
+
+QTabBar::tab {
+    background-color: #e2e2e2;
+    color: #606060;
+    border: 1px solid #c8c8c8;
+    border-bottom: none;
+    padding: 6px 16px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    margin-right: 2px;
+}
+
+QTabBar::tab:selected {
+    background-color: #f0f0f0;
+    color: #1e1e1e;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #d4d4d4;
+    color: #1e1e1e;
+}
+
+/* ---------- Tooltip ---------- */
+QToolTip {
+    background-color: #f8f8f0;
+    color: #1e1e1e;
+    border: 1px solid #c8c8c8;
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 12px;
+}

@@ -1,0 +1,318 @@
+"""
+GUI/grid_view.py — Advanced XML Grid Panel Prototype
+
+Implements Altova XMLSpy-style Grid View:
+1. Normal Nested Grid: Container widgets for non-repeating elements.
+2. Table Display: Grid/Table layout for repeating elements.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from lxml import etree
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
+    QGridLayout, QPushButton, QSizePolicy, QMessageBox
+)
+from PyQt6.QtCore import Qt
+
+
+class _GridNode:
+    """Lightweight node holding element name, optional value, and children."""
+    __slots__ = ("element", "value", "children", "is_expanded")
+
+    def __init__(self, element: str, value: str = "", children: list[_GridNode] | None = None):
+        self.element = element
+        self.value = value
+        self.children = children or []
+        self.is_expanded = False
+
+    def append_child(self, child: _GridNode) -> _GridNode:
+        self.children.append(child)
+        return child
+
+
+# =====================================================================
+#  Widget Components
+# =====================================================================
+class HeaderWidget(QWidget):
+    """Clickable header for the ExpandableFrame."""
+    def __init__(self, node: _GridNode, toggle_callback, parent=None):
+        super().__init__(parent)
+        self.toggle_callback = toggle_callback
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(6)
+        
+        self.toggle_btn = QPushButton("-" if node.is_expanded else "+")
+        self.toggle_btn.setFixedSize(16, 16)
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #a0a0a0;
+                background: #f0f0f0;
+                font-family: monospace;
+                font-weight: bold;
+                font-size: 11px;
+                padding: 0px;
+                border-radius: 2px;
+                color: #1e1e1e;
+            }
+            QPushButton:hover {
+                background: #e0e0e0;
+                border: 1px solid #808080;
+            }
+        """)
+        self.toggle_btn.clicked.connect(self.toggle_callback)
+        
+        self.title_label = QLabel(node.element)
+        self.title_label.setStyleSheet("font-weight: bold; color: #1e1e1e; font-size: 12px;")
+        self.title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        layout.addWidget(self.toggle_btn)
+        layout.addWidget(self.title_label)
+        layout.addStretch()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.toggle_callback()
+            event.accept()
+
+class ExpandableFrame(QFrame):
+    """A generic frame that can be expanded/collapsed."""
+
+    def __init__(self, node: _GridNode, on_rebuild, parent=None):
+        super().__init__(parent)
+        self.node = node
+        self.on_rebuild = on_rebuild
+        
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        
+        # Header
+        self.header_widget = HeaderWidget(node, self.toggle)
+        self.main_layout.addWidget(self.header_widget)
+
+        # Content is ONLY created if expanded (data-driven view)
+        if node.is_expanded:
+            self.content_widget = QWidget()
+            self.content_layout = QVBoxLayout(self.content_widget)
+            self.content_layout.setContentsMargins(20, 2, 0, 4)
+            self.content_layout.setSpacing(4)
+            self.main_layout.addWidget(self.content_widget)
+        else:
+            self.content_layout = None
+        
+    def toggle(self):
+        self.node.is_expanded = not self.node.is_expanded
+        self.on_rebuild()
+        
+    def add_widget(self, widget: QWidget):
+        if self.content_layout is not None:
+            self.content_layout.addWidget(widget)
+
+
+class TableDisplayWidget(QWidget):
+    """Renders repeating XML elements as a nested table."""
+
+    def __init__(self, element_name: str, items: list[_GridNode], on_rebuild, parent=None):
+        super().__init__(parent)
+        self.on_rebuild = on_rebuild
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 4, 0, 4)
+        main_layout.setSpacing(4)
+        
+        # Header for the table display
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        lbl = QLabel(f"<b>{element_name} ({len(items)})</b>")
+        lbl.setStyleSheet("color: #b8960c; font-size: 12px;")
+        header_layout.addWidget(lbl)
+        header_layout.addStretch()
+        main_layout.addLayout(header_layout)
+        
+        # Determine all possible child elements (columns)
+        columns = []
+        for item in items:
+            for child in item.children:
+                if child.element not in columns:
+                    columns.append(child.element)
+                    
+        if not columns:
+            columns = ["Value"]
+            
+        # Grid frame
+        grid_frame = QFrame()
+        grid_frame.setStyleSheet("QFrame { background: #d8d8d8; border: 1px solid #c8c8c8; }")
+        grid_layout = QGridLayout(grid_frame)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setSpacing(1)
+        
+        # Row number column header
+        hdr = QLabel("")
+        hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
+        grid_layout.addWidget(hdr, 0, 0)
+        
+        # Headers
+        for c, col_name in enumerate(columns):
+            hdr = QLabel(f"<b>{col_name}</b>")
+            hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
+            grid_layout.addWidget(hdr, 0, c + 1)
+            
+        # Rows
+        for r, item in enumerate(items):
+            # Row number
+            row_lbl = QLabel(str(r + 1))
+            row_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignTop)
+            row_lbl.setStyleSheet("background: #f0f0f0; padding: 6px; font-size: 11px; color: #888; border: none;")
+            grid_layout.addWidget(row_lbl, r + 1, 0)
+            
+            if not item.children:
+                val_lbl = QLabel(item.value)
+                val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+                val_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none;")
+                grid_layout.addWidget(val_lbl, r + 1, 1)
+            else:
+                for c, col_name in enumerate(columns):
+                    child_node = next((ch for ch in item.children if ch.element == col_name), None)
+                    
+                    cell_widget = QWidget()
+                    cell_widget.setStyleSheet("background: #ffffff; border: none;")
+                    cell_layout = QVBoxLayout(cell_widget)
+                    cell_layout.setContentsMargins(6, 6, 6, 6)
+                    cell_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+                    
+                    if child_node:
+                        if not child_node.children:
+                            lbl = QLabel(child_node.value)
+                            lbl.setStyleSheet("background: transparent; border: none;") 
+                            cell_layout.addWidget(lbl)
+                        else:
+                            nested = render_node(child_node, self.on_rebuild)
+                            cell_layout.addWidget(nested)
+                    
+                    grid_layout.addWidget(cell_widget, r + 1, c + 1)
+                    
+        main_layout.addWidget(grid_frame)
+
+
+def render_node(node: _GridNode, on_rebuild) -> QWidget:
+    """Recursively render a node as a widget."""
+    if not node.children:
+        w = QWidget()
+        l = QHBoxLayout(w)
+        l.setContentsMargins(0, 0, 0, 0)
+        l.setSpacing(8)
+        lbl_elem = QLabel(f"<b>{node.element}</b>")
+        lbl_elem.setStyleSheet("color: #1e1e1e;")
+        lbl_val = QLabel(node.value)
+        l.addWidget(lbl_elem)
+        l.addWidget(lbl_val)
+        l.addStretch()
+        return w
+        
+    # Group children to detect repeats
+    groups = {}
+    for c in node.children:
+        groups.setdefault(c.element, []).append(c)
+        
+    frame = ExpandableFrame(node, on_rebuild)
+    
+    if node.is_expanded:
+        for element_name, items in groups.items():
+            if len(items) == 1:
+                frame.add_widget(render_node(items[0], on_rebuild))
+            else:
+                frame.add_widget(TableDisplayWidget(element_name, items, on_rebuild))
+            
+    return frame
+
+
+
+
+# =====================================================================
+#  XML Parser
+# =====================================================================
+def _parse_xml_to_grid(filepath: str) -> _GridNode:
+    root = _GridNode("")
+    root.is_expanded = True
+    
+    try:
+        tree = etree.parse(filepath)
+        xml_root = tree.getroot()
+        
+        def _recursive_parse(xml_el):
+            text_val = (xml_el.text or "").strip()
+            node = _GridNode(xml_el.tag, text_val)
+            for child in xml_el:
+                child_node = _recursive_parse(child)
+                node.append_child(child_node)
+            return node
+            
+        parsed_root = _recursive_parse(xml_root)
+        parsed_root.is_expanded = True
+        root.append_child(parsed_root)
+        
+    except Exception as e:
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("XML Load Error")
+        msg.setText(f"Could not load XML file:\n{filepath}")
+        msg.setDetailedText(str(e))
+        msg.exec()
+        
+    return root
+
+
+# =====================================================================
+#  Main Panel Widget
+# =====================================================================
+class XmlGridPanel(QWidget):
+    """Altova XMLSpy-style nested Grid View prototype."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Main scroll area to contain the arbitrarily tall/wide grid
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("QScrollArea { border: none; background: #ffffff; }")
+
+        self.content_widget = QWidget()
+        self.content_widget.setStyleSheet("background: #ffffff;")
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(8, 8, 8, 8)
+        self.content_layout.setSpacing(8)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        self.scroll_area.setWidget(self.content_widget)
+        layout.addWidget(self.scroll_area)
+
+        # Load actual XML data
+        sample_path = Path(__file__).resolve().parent.parent / "sample.xml"
+        self._demo_root = _parse_xml_to_grid(str(sample_path))
+        self._rebuild()
+
+    def _rebuild(self):
+        """Rebuilds the entire UI from the data model state."""
+        # Clear existing
+        while self.content_layout.count():
+            child = self.content_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+                
+        # If the root is a hidden root with children, render children
+        if self._demo_root.element == "" and self._demo_root.children:
+            for child in self._demo_root.children:
+                self.content_layout.addWidget(render_node(child, self._rebuild))
+        else:
+            self.content_layout.addWidget(render_node(self._demo_root, self._rebuild))
