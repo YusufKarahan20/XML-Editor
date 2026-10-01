@@ -6,8 +6,10 @@ QStandardItemModel.  The model is a placeholder that will be replaced
 by the real XML tree model from XML/tree_model.py.
 """
 
+from pathlib import Path
+from lxml import etree
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QTreeView, QSizePolicy,
+    QWidget, QVBoxLayout, QLabel, QTreeView, QSizePolicy, QMessageBox
 )
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QFont, QIcon
 from PyQt6.QtCore import Qt
@@ -43,10 +45,9 @@ class XmlTreePanel(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-        # Placeholder demo model
-        self._demo_model = self._create_demo_model()
-        self.tree_view.setModel(self._demo_model)
-        self.tree_view.expandAll()
+        # Load actual XML model
+        self._xml_model = self._load_xml_model()
+        self.tree_view.setModel(self._xml_model)
 
         layout.addWidget(self.tree_view)
 
@@ -62,36 +63,41 @@ class XmlTreePanel(QWidget):
         return self.tree_view
 
     # ------------------------------------------------------------------
-    # Placeholder model
+    # XML loading
     # ------------------------------------------------------------------
     @staticmethod
-    def _create_demo_model() -> QStandardItemModel:
-        """Build a small demo tree to visualize the layout."""
+    def _load_xml_model() -> QStandardItemModel:
+        """Parse sample.xml and build a QStandardItemModel."""
         model = QStandardItemModel()
-
+        
         mono = QFont("Cascadia Code", 12)
         mono.setStyleHint(QFont.StyleHint.Monospace)
 
-        def _item(text):
+        def _create_item(text):
             item = QStandardItem(text)
             item.setFont(mono)
             item.setEditable(False)
             return item
 
-        root = _item("orders")
-        order1 = _item("order")
-        order1.appendRows([
-            _item("customer"),
-            _item("items"),
-            _item("total"),
-        ])
-        order2 = _item("order")
-        order2.appendRows([
-            _item("customer"),
-            _item("items"),
-            _item("total"),
-        ])
-        root.appendRows([order1, order2])
-        model.appendRow(root)
+        sample_path = Path(__file__).resolve().parent.parent / "sample.xml"
+        
+        try:
+            tree = etree.parse(str(sample_path))
+            xml_root = tree.getroot()
+
+            def _recursive_build(xml_el):
+                node = _create_item(xml_el.tag)
+                for child in xml_el:
+                    child_node = _recursive_build(child)
+                    node.appendRow(child_node)
+                return node
+
+            parsed_root = _recursive_build(xml_root)
+            model.appendRow(parsed_root)
+            
+        except Exception as e:
+            # Fallback if something fails
+            err_item = _create_item(f"Error loading XML: {e}")
+            model.appendRow(err_item)
 
         return model

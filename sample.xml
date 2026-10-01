@@ -2855,8 +2855,454 @@
       </Devices>
     </Customer>
   </CustomerList>
+
+  <EmployeeList>
+    <Employee>
+      <EmployeeId>EMP-1001</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Hasan</FirstName>
+        <LastName>Kaya</LastName>
+        <BirthDate>1985-04-23</BirthDate>
+        <ContactInfo>
+          <Phone>5559998877</Phone>
+          <Email>hasan.kaya@company.com</Email>
+          <Address>
+            <City>İstanbul</City>
+            <District>Şişli</District>
+            <Street>Büyükdere Cad. No:15</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>IT</Department>
+        <Position>Backend Developer</Position>
+        <HireDate>2021-06-01</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-A1</ProjectId>
+          <ProjectName>Database Migration</ProjectName>
+          <Role>Lead</Role>
+          <Status>ONGOING</Status>
+        </Project>
+        <Project>
+          <ProjectId>PRJ-A2</ProjectId>
+          <ProjectName>API V2</ProjectName>
+          <Role>Contributor</Role>
+          <Status>PLANNED</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1002</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Ayşe</FirstName>
+        <LastName>Demir</LastName>
+        <BirthDate>1992-11-14</BirthDate>
+        <ContactInfo>
+          <Phone>5558887766</Phone>
+          <Email>ayse.demir@company.com</Email>
+          <Address>
+            <City>İstanbul</City>
+            <District>Beşiktaş</District>
+            <Street>Barbaros Bulvarı No:42</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>HR</Department>
+        <Position>HR Specialist</Position>
+        <HireDate>2019-09-10</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-H1</ProjectId>
+          <ProjectName>Onboarding Automation</ProjectName>
+          <Role>Lead</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1003</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Mert</FirstName>
+        <LastName>Yılmaz</LastName>
+        <BirthDate>1988-02-28</BirthDate>
+        <ContactInfo>
+          <Phone>5557776655</Phone>
+          <Email>mert.yilmaz@company.com</Email>
+          <Address>
+            <City>Ankara</City>
+            <District>Çankaya</District>
+            <Street>Tunalı Hilmi Cad. No:88</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>Sales</Department>
+        <Position>Regional Manager</Position>
+        <HireDate>2018-03-15</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-S1</ProjectId>
+          <ProjectName>B2B Expansion</ProjectName>
+          <Role>Manager</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1004</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Zeynep</FirstName>
+        <LastName>Çelik</LastName>
+        <BirthDate>1995-07-09</BirthDate>
+        <ContactInfo>
+          <Phone>5556665544</Phone>
+          <Email>zeynep.celik@company.com</Email>
+          <Address>
+            <City>İzmir</City>
+            <District>Bornova</District>
+            <Street>Kazım Dirik Cad. No:11</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>IT</Department>
+        <Position>Frontend Developer</Position>
+        <HireDate>2022-08-01</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-A2</ProjectId>
+          <ProjectName>API V2 Dashboard</ProjectName>
+          <Role>Lead</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1005</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Can</FirstName>
+        <LastName>Arslan</LastName>
+        <BirthDate>1990-12-05</BirthDate>
+        <ContactInfo>
+          <Phone>5555554433</Phone>
+          <Email>can.arslan@company.com</Email>
+          <Address>
+            <City>Antalya</City>
+            <District>Muratpaşa</District>
+            <Street>Lara Yolu No:7</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>Marketing</Department>
+        <Position>Marketing Analyst</Position>
+        <HireDate>2021-11-20</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-M1</ProjectId>
+          <ProjectName>Q4 Campaign</ProjectName>
+          <Role>Contributor</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1006</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Elif</FirstName>
+        <LastName>Polat</LastName>
+        <BirthDate>1987-03-18</BirthDate>
+        <ContactInfo>
+          <Phone>5554443322</Phone>
+          <Email>elif.polat@company.com</Email>
+          <Address>
+            <City>Bursa</City>
+            <District>Nilüfer</District>
+            <Street>FSM Bulvarı No:90</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>Finance</Department>
+        <Position>Senior Accountant</Position>
+        <HireDate>2017-05-10</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-F1</ProjectId>
+          <ProjectName>Year-End Audit</ProjectName>
+          <Role>Lead</Role>
+          <Status>PLANNED</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1007</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Burak</FirstName>
+        <LastName>Şahin</LastName>
+        <BirthDate>1993-09-22</BirthDate>
+        <ContactInfo>
+          <Phone>5553332211</Phone>
+          <Email>burak.sahin@company.com</Email>
+          <Address>
+            <City>İstanbul</City>
+            <District>Kadıköy</District>
+            <Street>Moda Cad. No:44</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>IT</Department>
+        <Position>DevOps Engineer</Position>
+        <HireDate>2020-10-05</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-D1</ProjectId>
+          <ProjectName>Cloud Infrastructure Setup</ProjectName>
+          <Role>Lead</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1008</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Derya</FirstName>
+        <LastName>Koç</LastName>
+        <BirthDate>1996-01-30</BirthDate>
+        <ContactInfo>
+          <Phone>5552221100</Phone>
+          <Email>derya.koc@company.com</Email>
+          <Address>
+            <City>Eskişehir</City>
+            <District>Tepebaşı</District>
+            <Street>Bağlar Sokak No:12</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>Sales</Department>
+        <Position>Sales Representative</Position>
+        <HireDate>2023-02-01</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-S2</ProjectId>
+          <ProjectName>Local Market Penetration</ProjectName>
+          <Role>Contributor</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1009</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Emre</FirstName>
+        <LastName>Yıldız</LastName>
+        <BirthDate>1989-08-14</BirthDate>
+        <ContactInfo>
+          <Phone>5551110099</Phone>
+          <Email>emre.yildiz@company.com</Email>
+          <Address>
+            <City>Adana</City>
+            <District>Çukurova</District>
+            <Street>Turgut Özal Blv. No:5</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>HR</Department>
+        <Position>Talent Acquisition Lead</Position>
+        <HireDate>2018-12-15</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-H2</ProjectId>
+          <ProjectName>University Recruiting 2026</ProjectName>
+          <Role>Manager</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+    <Employee>
+      <EmployeeId>EMP-1010</EmployeeId>
+      <PersonalInfo>
+        <FirstName>Selin</FirstName>
+        <LastName>Acar</LastName>
+        <BirthDate>1998-05-19</BirthDate>
+        <ContactInfo>
+          <Phone>5550009988</Phone>
+          <Email>selin.acar@company.com</Email>
+          <Address>
+            <City>Muğla</City>
+            <District>Bodrum</District>
+            <Street>Marina Yolu No:3</Street>
+          </Address>
+        </ContactInfo>
+      </PersonalInfo>
+      <CompanyDetails>
+        <Department>Marketing</Department>
+        <Position>Social Media Manager</Position>
+        <HireDate>2024-04-10</HireDate>
+      </CompanyDetails>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-M2</ProjectId>
+          <ProjectName>Brand Awareness Campaign</ProjectName>
+          <Role>Lead</Role>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employee>
+  </EmployeeList>
+
+  <EmployerList>
+    <Employer>
+      <EmployerId>COMP-101</EmployerId>
+      <CompanyDetails>
+        <CompanyName>Tech Solutions A.Ş.</CompanyName>
+        <Industry>Software Development</Industry>
+        <TaxNumber>1112223334</TaxNumber>
+      </CompanyDetails>
+      <ContactInfo>
+        <Phone>2125550011</Phone>
+        <Email>contact@techsolutions.com</Email>
+        <Address>
+          <City>İstanbul</City>
+          <District>Levent</District>
+          <Street>Plaza Sokak No:5</Street>
+        </Address>
+      </ContactInfo>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-TS1</ProjectId>
+          <ProjectName>E-Commerce Platform</ProjectName>
+          <Budget>500000</Budget>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employer>
+    <Employer>
+      <EmployerId>COMP-102</EmployerId>
+      <CompanyDetails>
+        <CompanyName>Global Logistics Ltd.</CompanyName>
+        <Industry>Transportation</Industry>
+        <TaxNumber>2223334445</TaxNumber>
+      </CompanyDetails>
+      <ContactInfo>
+        <Phone>2126661122</Phone>
+        <Email>info@globallogistics.com</Email>
+        <Address>
+          <City>İzmir</City>
+          <District>Alsancak</District>
+          <Street>Liman Cad. No:12</Street>
+        </Address>
+      </ContactInfo>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-GL1</ProjectId>
+          <ProjectName>Fleet Tracking System</ProjectName>
+          <Budget>850000</Budget>
+          <Status>PLANNED</Status>
+        </Project>
+      </ActiveProjects>
+    </Employer>
+    <Employer>
+      <EmployerId>COMP-103</EmployerId>
+      <CompanyDetails>
+        <CompanyName>BuildCorp İnşaat</CompanyName>
+        <Industry>Construction</Industry>
+        <TaxNumber>3334445556</TaxNumber>
+      </CompanyDetails>
+      <ContactInfo>
+        <Phone>3127772233</Phone>
+        <Email>hello@buildcorp.com.tr</Email>
+        <Address>
+          <City>Ankara</City>
+          <District>Yenimahalle</District>
+          <Street>Ostim Bulvarı No:45</Street>
+        </Address>
+      </ContactInfo>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-BC1</ProjectId>
+          <ProjectName>New Headquarters</ProjectName>
+          <Budget>2500000</Budget>
+          <Status>ONGOING</Status>
+        </Project>
+        <Project>
+          <ProjectId>PRJ-BC2</ProjectId>
+          <ProjectName>Smart City Residences</ProjectName>
+          <Budget>7500000</Budget>
+          <Status>PLANNED</Status>
+        </Project>
+      </ActiveProjects>
+    </Employer>
+    <Employer>
+      <EmployerId>COMP-104</EmployerId>
+      <CompanyDetails>
+        <CompanyName>HealthPlus Medikal</CompanyName>
+        <Industry>Healthcare</Industry>
+        <TaxNumber>4445556667</TaxNumber>
+      </CompanyDetails>
+      <ContactInfo>
+        <Phone>2428883344</Phone>
+        <Email>support@healthplus.com</Email>
+        <Address>
+          <City>Antalya</City>
+          <District>Kepez</District>
+          <Street>Sağlık Cad. No:99</Street>
+        </Address>
+      </ContactInfo>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-HP1</ProjectId>
+          <ProjectName>Clinic Automation Software</ProjectName>
+          <Budget>300000</Budget>
+          <Status>ONGOING</Status>
+        </Project>
+      </ActiveProjects>
+    </Employer>
+    <Employer>
+      <EmployerId>COMP-105</EmployerId>
+      <CompanyDetails>
+        <CompanyName>EduTech Eğitim A.Ş.</CompanyName>
+        <Industry>Education</Industry>
+        <TaxNumber>5556667778</TaxNumber>
+      </CompanyDetails>
+      <ContactInfo>
+        <Phone>2249994455</Phone>
+        <Email>contact@edutech.com.tr</Email>
+        <Address>
+          <City>Bursa</City>
+          <District>Osmangazi</District>
+          <Street>Okul Sokak No:8</Street>
+        </Address>
+      </ContactInfo>
+      <ActiveProjects>
+        <Project>
+          <ProjectId>PRJ-ET1</ProjectId>
+          <ProjectName>Online Learning Portal V3</ProjectName>
+          <Budget>400000</Budget>
+          <Status>COMPLETED</Status>
+        </Project>
+      </ActiveProjects>
+    </Employer>
+  </EmployerList>
+
   <Summary>
     <TotalCustomerCount>20</TotalCustomerCount>
+    <TotalEmployeeCount>10</TotalEmployeeCount>
+    <TotalEmployerCount>5</TotalEmployerCount>
     <Statistics>
       <ActiveCustomerCount>41</ActiveCustomerCount>
       <PassiveCustomerCount>9</PassiveCustomerCount>

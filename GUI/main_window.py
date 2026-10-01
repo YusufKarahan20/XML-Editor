@@ -99,7 +99,9 @@ class MainWindow(QMainWindow):
         # ── View ─────────────────────────────────────────────────────
         _action("view_tree",  "Tree View",    None, "Switch to tree view")
         _action("view_grid",  "Grid View",    None, "Switch to grid view")
-        _action("view_json",  "JSON Preview", None, "Toggle JSON preview")
+        json_action = _action("view_json",  "JSON Preview", None, "Toggle JSON preview", slot=self._toggle_json_preview)
+        json_action.setCheckable(True)
+        json_action.setChecked(False)
 
         # ── Search ───────────────────────────────────────────────────
         _action("search_find",  "Search XML…",    "Ctrl+F",       "Search within XML")
@@ -226,6 +228,9 @@ class MainWindow(QMainWindow):
         central_layout.setSpacing(0)
         central_layout.addWidget(self.main_splitter)
         self.setCentralWidget(central)
+        
+        # Hide JSON preview by default
+        self.json_panel.hide()
 
     # ==================================================================
     #  STATUS BAR
@@ -270,6 +275,10 @@ class MainWindow(QMainWindow):
     # ==================================================================
     #  PLACEHOLDER SLOTS
     # ==================================================================
+    def _toggle_json_preview(self, checked: bool):
+        """Toggle the visibility of the JSON preview panel."""
+        self.json_panel.setVisible(checked)
+
     def _placeholder(self, action_name: str):
         """Default handler for not-yet-implemented actions."""
         self.statusBar().showMessage(f"Action '{action_name}' — not implemented yet", 3000)
