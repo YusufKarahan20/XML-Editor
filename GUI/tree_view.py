@@ -45,11 +45,17 @@ class XmlTreePanel(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-        # Load actual XML model
-        self._xml_model = self._load_xml_model()
+        # Empty model initially
+        self._xml_model = QStandardItemModel()
         self.tree_view.setModel(self._xml_model)
 
         layout.addWidget(self.tree_view)
+
+    def load_xml(self, filepath: str):
+        """Load XML from filepath and update the tree model."""
+        new_model = self._build_xml_model(filepath)
+        self._xml_model = new_model
+        self.tree_view.setModel(self._xml_model)
 
     # ------------------------------------------------------------------
     # Public API — for future integration
@@ -66,8 +72,8 @@ class XmlTreePanel(QWidget):
     # XML loading
     # ------------------------------------------------------------------
     @staticmethod
-    def _load_xml_model() -> QStandardItemModel:
-        """Parse sample.xml and build a QStandardItemModel."""
+    def _build_xml_model(filepath: str) -> QStandardItemModel:
+        """Parse given XML file and build a QStandardItemModel."""
         model = QStandardItemModel()
         
         mono = QFont("Cascadia Code", 12)
@@ -79,25 +85,17 @@ class XmlTreePanel(QWidget):
             item.setEditable(False)
             return item
 
-        sample_path = Path(__file__).resolve().parent.parent / "sample.xml"
-        
-        try:
-            tree = etree.parse(str(sample_path))
-            xml_root = tree.getroot()
+        tree = etree.parse(filepath)
+        xml_root = tree.getroot()
 
-            def _recursive_build(xml_el):
-                node = _create_item(xml_el.tag)
-                for child in xml_el:
-                    child_node = _recursive_build(child)
-                    node.appendRow(child_node)
-                return node
+        def _recursive_build(xml_el):
+            node = _create_item(xml_el.tag)
+            for child in xml_el:
+                child_node = _recursive_build(child)
+                node.appendRow(child_node)
+            return node
 
-            parsed_root = _recursive_build(xml_root)
-            model.appendRow(parsed_root)
-            
-        except Exception as e:
-            # Fallback if something fails
-            err_item = _create_item(f"Error loading XML: {e}")
-            model.appendRow(err_item)
+        parsed_root = _recursive_build(xml_root)
+        model.appendRow(parsed_root)
 
         return model

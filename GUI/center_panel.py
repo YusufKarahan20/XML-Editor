@@ -19,13 +19,6 @@ class TextViewPanel(QWidget):
         self.text_edit = QPlainTextEdit()
         self.text_edit.setReadOnly(True)
         
-        sample_path = Path(__file__).resolve().parent.parent / "sample.xml"
-        try:
-            with open(sample_path, "r", encoding="utf-8") as f:
-                self.text_edit.setPlainText(f.read())
-        except Exception as e:
-            self.text_edit.setPlainText(f"(Dosya bulunamadı veya okunamadı: {sample_path})\nHata: {e}")
-            
         self.text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         
         mono = QFont("Cascadia Code", 12)
@@ -33,6 +26,11 @@ class TextViewPanel(QWidget):
         self.text_edit.setFont(mono)
         
         layout.addWidget(self.text_edit)
+
+    def load_xml(self, filepath: str):
+        """Load the XML file text into the editor."""
+        with open(filepath, "r", encoding="utf-8") as f:
+            self.text_edit.setPlainText(f.read())
 
 class CenterPanel(QWidget):
     """Center panel holding Text View and Grid View tabs."""
@@ -55,3 +53,8 @@ class CenterPanel(QWidget):
         self.tabs.addTab(self.grid_view, "Grid View")
         
         layout.addWidget(self.tabs)
+
+    def load_xml(self, filepath: str):
+        """Distribute the filepath to child panels."""
+        self.text_view.load_xml(filepath)
+        self.grid_view.load_xml(filepath)

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtCore import Qt, QSize
+from lxml import etree
 
 from GUI.tree_view import XmlTreePanel
 from GUI.center_panel import CenterPanel
@@ -51,6 +52,9 @@ class MainWindow(QMainWindow):
         self._create_toolbar()
         self._create_central_area()
         self._create_status_bar()
+        
+        self.current_xml_path = None
+        self.update_status(state="No XML file opened")
 
     # ==================================================================
     #  STYLESHEET
@@ -84,7 +88,8 @@ class MainWindow(QMainWindow):
             return action
 
         # ── File ─────────────────────────────────────────────────────
-        _action("file_open",    "Open XML…",   "Ctrl+O",  "Open an XML file")
+        _action("file_open",    "Open XML…",   "Ctrl+O",  "Open an XML file",
+                slot=self._open_file_dialog)
         _action("file_save",    "Save",         "Ctrl+S",  "Save current file")
         _action("file_save_as", "Save As…",     "Ctrl+Shift+S", "Save file as…")
         _action("file_exit",    "Exit",         "Ctrl+Q",  "Quit application",
@@ -271,6 +276,44 @@ class MainWindow(QMainWindow):
     def get_action(self, name: str) -> QAction | None:
         """Retrieve a named action for external signal connections."""
         return self._actions.get(name)
+
+    # ==================================================================
+    #  FILE HANDLING
+    # ==================================================================
+    def _open_file_dialog(self):
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Open XML File", "", "XML Files (*.xml);;All Files (*)"
+        )
+        if filepath:
+            self.load_xml_file(filepath)
+
+    def load_xml_file(self, filepath: str):
+        """Validates and loads the XML file into all views."""
+        # 1. Validate XML first
+        try:
+            etree.parse(filepath)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "XML Load Error",
+                f"Could not parse the selected XML file.\nThe current view will not be changed.\n\nError: {e}"
+            )
+            return
+            
+        # 2. XML is valid, update the views
+        try:
+            self.tree_panel.load_xml(filepath)
+            self.center_panel.load_xml(filepath)
+            
+            self.current_xml_path = filepath
+            filename = Path(filepath).name
+            self.update_status(state=f"Opened: {filename}")
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "XML Load Error",
+                f"An error occurred while populating the views:\n\n{e}"
+            )
 
     # ==================================================================
     #  PLACEHOLDER SLOTS

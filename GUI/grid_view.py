@@ -240,29 +240,20 @@ def _parse_xml_to_grid(filepath: str) -> _GridNode:
     root = _GridNode("")
     root.is_expanded = True
     
-    try:
-        tree = etree.parse(filepath)
-        xml_root = tree.getroot()
+    tree = etree.parse(filepath)
+    xml_root = tree.getroot()
+    
+    def _recursive_parse(xml_el):
+        text_val = (xml_el.text or "").strip()
+        node = _GridNode(xml_el.tag, text_val)
+        for child in xml_el:
+            child_node = _recursive_parse(child)
+            node.append_child(child_node)
+        return node
         
-        def _recursive_parse(xml_el):
-            text_val = (xml_el.text or "").strip()
-            node = _GridNode(xml_el.tag, text_val)
-            for child in xml_el:
-                child_node = _recursive_parse(child)
-                node.append_child(child_node)
-            return node
-            
-        parsed_root = _recursive_parse(xml_root)
-        parsed_root.is_expanded = True
-        root.append_child(parsed_root)
-        
-    except Exception as e:
-        msg = QMessageBox()
-        msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle("XML Load Error")
-        msg.setText(f"Could not load XML file:\n{filepath}")
-        msg.setDetailedText(str(e))
-        msg.exec()
+    parsed_root = _recursive_parse(xml_root)
+    # parsed_root.is_expanded is False by default, keeping it collapsed
+    root.append_child(parsed_root)
         
     return root
 
@@ -297,9 +288,13 @@ class XmlGridPanel(QWidget):
         self.scroll_area.setWidget(self.content_widget)
         layout.addWidget(self.scroll_area)
 
-        # Load actual XML data
-        sample_path = Path(__file__).resolve().parent.parent / "sample.xml"
-        self._demo_root = _parse_xml_to_grid(str(sample_path))
+        # Initial empty root
+        self._demo_root = _GridNode("")
+        self._rebuild()
+        
+    def load_xml(self, filepath: str):
+        """Load XML from filepath and update the grid view."""
+        self._demo_root = _parse_xml_to_grid(filepath)
         self._rebuild()
 
     def _rebuild(self):
