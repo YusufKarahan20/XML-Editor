@@ -9,6 +9,8 @@ from PyQt6.QtGui import QFont
 
 from GUI.grid_view import XmlGridPanel
 
+from GUI.text_editor import XmlTextEditor
+
 class TextViewPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -16,14 +18,7 @@ class TextViewPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        self.text_edit = QPlainTextEdit()
-        self.text_edit.setReadOnly(True)
-        
-        self.text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        
-        mono = QFont("Cascadia Code", 12)
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        self.text_edit.setFont(mono)
+        self.text_edit = XmlTextEditor()
         
         layout.addWidget(self.text_edit)
 

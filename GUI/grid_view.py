@@ -121,30 +121,72 @@ class TableDisplayWidget(QWidget):
     def __init__(self, element_name: str, items: list[_GridNode], on_rebuild, parent=None):
         super().__init__(parent)
         self.on_rebuild = on_rebuild
+        self.items = items
+        
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 4, 0, 4)
         main_layout.setSpacing(4)
         
-        # Header for the table display
+        # Header for the table display with toggle button
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.toggle_btn = QPushButton("-" if items[0].is_expanded else "+")
+        self.toggle_btn.setFixedSize(16, 16)
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #a0a0a0;
+                background: #f0f0f0;
+                font-family: monospace;
+                font-weight: bold;
+                font-size: 11px;
+                padding: 0px;
+                border-radius: 2px;
+                color: #1e1e1e;
+            }
+            QPushButton:hover {
+                background: #e0e0e0;
+                border: 1px solid #808080;
+            }
+        """)
+        self.toggle_btn.clicked.connect(self.toggle)
+        header_layout.addWidget(self.toggle_btn)
+        
         lbl = QLabel(f"<b>{element_name} ({len(items)})</b>")
         lbl.setStyleSheet("color: #b8960c; font-size: 12px;")
+        lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        lbl.mousePressEvent = lambda e: self.toggle() if e.button() == Qt.MouseButton.LeftButton else None
+        
         header_layout.addWidget(lbl)
         header_layout.addStretch()
         main_layout.addLayout(header_layout)
         
-        # Determine all possible child elements (columns)
+        # Görev 1: Eğer tablo collapsed ise içeriği (grid_frame) hiç oluşturma
+        if not items[0].is_expanded:
+            return
+            
+        # Görev 2: Tablo sütunlarını ve Namespace varlığını tespit et
+        has_namespaces = False
+        ns_header_title = "xmlns"
+        
         columns = []
         for item in items:
             for child in item.children:
+                if child.element == "@xmlns":
+                    has_namespaces = True
+                    # Başlık için ilk bulduğumuz namespace'in prefix'ini örnek alabiliriz
+                    if child.children and ns_header_title == "xmlns":
+                        ns_header_title = child.children[0].element
+                    continue
+                    
                 if child.element not in columns:
                     columns.append(child.element)
                     
         if not columns:
             columns = ["Value"]
             
-        # Grid frame
+        # Grid frame oluşturma
         grid_frame = QFrame()
         grid_frame.setStyleSheet("QFrame { background: #d8d8d8; border: 1px solid #c8c8c8; }")
         grid_layout = QGridLayout(grid_frame)
@@ -156,13 +198,22 @@ class TableDisplayWidget(QWidget):
         hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
         grid_layout.addWidget(hdr, 0, 0)
         
-        # Headers
+        col_offset = 1
+        
+        # Eğer namespace varsa ilk sütunu ekle
+        if has_namespaces:
+            ns_hdr = QLabel(f"<b>{ns_header_title}</b>")
+            ns_hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
+            grid_layout.addWidget(ns_hdr, 0, col_offset)
+            col_offset += 1
+        
+        # Normal çocuk kolonların başlıkları
         for c, col_name in enumerate(columns):
             hdr = QLabel(f"<b>{col_name}</b>")
             hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
-            grid_layout.addWidget(hdr, 0, c + 1)
+            grid_layout.addWidget(hdr, 0, col_offset + c)
             
-        # Rows
+        # Satırları oluşturma
         for r, item in enumerate(items):
             # Row number
             row_lbl = QLabel(str(r + 1))
@@ -170,11 +221,37 @@ class TableDisplayWidget(QWidget):
             row_lbl.setStyleSheet("background: #f0f0f0; padding: 6px; font-size: 11px; color: #888; border: none;")
             grid_layout.addWidget(row_lbl, r + 1, 0)
             
-            if not item.children:
+            current_col = 1
+            
+            # Namespace sütunu verisi (sadece lokal declaration varsa dolar)
+            if has_namespaces:
+                ns_node = next((ch for ch in item.children if ch.element == "@xmlns"), None)
+                ns_val = ""
+                if ns_node and ns_node.children:
+                    lines = []
+                    for nc in ns_node.children:
+                        # Eğer birden fazla namespace varsa prefix=URI formatında göster,
+                        # tekse sadece URI'yi göster ki hücre gereksiz kalabalık olmasın.
+                        if len(ns_node.children) > 1:
+                            lines.append(f"{nc.element}={nc.value}")
+                        else:
+                            lines.append(nc.value)
+                    ns_val = "\n".join(lines)
+                
+                ns_lbl = QLabel(ns_val)
+                ns_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+                ns_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none; color: #333;")
+                ns_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                grid_layout.addWidget(ns_lbl, r + 1, current_col)
+                current_col += 1
+            
+            # Eğer elemanın ne normal çocukları ne de text'i yoksa veya
+            # sadece @xmlns namespace'i varsa (text'i boş olan leaf):
+            if not item.children or (len(item.children) == 1 and item.children[0].element == "@xmlns"):
                 val_lbl = QLabel(item.value)
                 val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
                 val_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none;")
-                grid_layout.addWidget(val_lbl, r + 1, 1)
+                grid_layout.addWidget(val_lbl, r + 1, current_col)
             else:
                 for c, col_name in enumerate(columns):
                     child_node = next((ch for ch in item.children if ch.element == col_name), None)
@@ -189,14 +266,19 @@ class TableDisplayWidget(QWidget):
                         if not child_node.children:
                             lbl = QLabel(child_node.value)
                             lbl.setStyleSheet("background: transparent; border: none;") 
+                            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                             cell_layout.addWidget(lbl)
                         else:
                             nested = render_node(child_node, self.on_rebuild)
                             cell_layout.addWidget(nested)
                     
-                    grid_layout.addWidget(cell_widget, r + 1, c + 1)
+                    grid_layout.addWidget(cell_widget, r + 1, current_col + c)
                     
         main_layout.addWidget(grid_frame)
+
+    def toggle(self):
+        self.items[0].is_expanded = not self.items[0].is_expanded
+        self.on_rebuild()
 
 
 def render_node(node: _GridNode, on_rebuild) -> QWidget:
@@ -222,6 +304,25 @@ def render_node(node: _GridNode, on_rebuild) -> QWidget:
     frame = ExpandableFrame(node, on_rebuild)
     
     if node.is_expanded:
+        if "@xmlns" in groups:
+            xmlns_nodes = groups.pop("@xmlns")[0].children
+            ns_widget = QWidget()
+            ns_layout = QGridLayout(ns_widget)
+            ns_layout.setContentsMargins(0, 0, 0, 4)
+            ns_layout.setSpacing(0)
+            
+            for row, ns_child in enumerate(xmlns_nodes):
+                lbl_pfx = QLabel(f"<b>{ns_child.element}</b>")
+                lbl_pfx.setStyleSheet("background: #f0f0f0; border: 1px solid #d0d0d0; padding: 4px; color: #555;")
+                lbl_uri = QLabel(ns_child.value)
+                lbl_uri.setStyleSheet("background: #ffffff; border: 1px solid #d0d0d0; border-left: none; padding: 4px; color: #333;")
+                lbl_uri.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                
+                ns_layout.addWidget(lbl_pfx, row, 0)
+                ns_layout.addWidget(lbl_uri, row, 1)
+                
+            frame.add_widget(ns_widget)
+
         for element_name, items in groups.items():
             if len(items) == 1:
                 frame.add_widget(render_node(items[0], on_rebuild))
@@ -243,11 +344,42 @@ def _parse_xml_to_grid(filepath: str) -> _GridNode:
     tree = etree.parse(filepath)
     xml_root = tree.getroot()
     
-    def _recursive_parse(xml_el):
+    def _recursive_parse(xml_el, parent_nsmap=None):
+        if parent_nsmap is None:
+            parent_nsmap = {}
+            
+        local_ns = {}
+        for pfx, uri in xml_el.nsmap.items():
+            if parent_nsmap.get(pfx) != uri:
+                local_ns[pfx] = uri
+                
+        tag = xml_el.tag
+        if tag.startswith("{"):
+            local_name = tag.split("}", 1)[1]
+        else:
+            local_name = tag
+            
+        if xml_el.prefix:
+            display_tag = f"{xml_el.prefix}:{local_name}"
+        else:
+            display_tag = local_name
+            
         text_val = (xml_el.text or "").strip()
-        node = _GridNode(xml_el.tag, text_val)
+        node = _GridNode(display_tag, text_val)
+        
+        if local_ns:
+            ns_node = _GridNode("@xmlns")
+            for pfx, uri in local_ns.items():
+                pfx_str = f"xmlns:{pfx}" if pfx else "xmlns"
+                ns_node.append_child(_GridNode(pfx_str, uri))
+            node.append_child(ns_node)
+            
+            if text_val:
+                node.append_child(_GridNode("Text", text_val))
+                node.value = ""
+                
         for child in xml_el:
-            child_node = _recursive_parse(child)
+            child_node = _recursive_parse(child, xml_el.nsmap)
             node.append_child(child_node)
         return node
         
