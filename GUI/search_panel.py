@@ -3,15 +3,12 @@ GUI/search_panel.py — Search Toolbar Widget
 
 A compact search bar with input field, search button, prev/next
 navigation, and a result count label.
-All callbacks are placeholders — the real search engine (SEARCH/)
-will be connected later.
 """
 
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel, QSizePolicy,
+    QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel
 )
-from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 
 
 class SearchPanel(QWidget):
@@ -46,6 +43,8 @@ class SearchPanel(QWidget):
         self.search_input.setMaximumWidth(360)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.returnPressed.connect(self._on_search)
+        self.search_input.textChanged.connect(self._on_text_changed)
+        self.search_input.installEventFilter(self)
         layout.addWidget(self.search_input)
 
         # Search button
@@ -59,14 +58,14 @@ class SearchPanel(QWidget):
         self.btn_prev = QPushButton("◀")
         self.btn_prev.setFixedWidth(32)
         self.btn_prev.setToolTip("Previous result")
-        self.btn_prev.clicked.connect(self.previous_requested.emit)
+        self.btn_prev.clicked.connect(self._on_prev_clicked)
         layout.addWidget(self.btn_prev)
 
         # Next result
         self.btn_next = QPushButton("▶")
         self.btn_next.setFixedWidth(32)
         self.btn_next.setToolTip("Next result")
-        self.btn_next.clicked.connect(self.next_requested.emit)
+        self.btn_next.clicked.connect(self._on_next_clicked)
         layout.addWidget(self.btn_next)
 
         # Result count
@@ -82,6 +81,17 @@ class SearchPanel(QWidget):
     def set_result_count(self, count: int):
         """Update the displayed result count."""
         self.result_label.setText(f"{count} match{'es' if count != 1 else ''}")
+
+    def show_error(self, message: str):
+        """Show an error or status message."""
+        self.result_label.setText(message)
+
+    def show_results(self, count: int):
+        """Update the result count label."""
+        if count == 0:
+            self.result_label.setText("Sonuç bulunamadı.")
+        else:
+            self.set_result_count(count)
 
     def get_query(self) -> str:
         """Return the current search query text."""
@@ -99,3 +109,16 @@ class SearchPanel(QWidget):
         query = self.get_query()
         if query:
             self.search_requested.emit(query)
+
+    def _on_text_changed(self, text: str):
+        if not text.strip():
+            self.search_requested.emit("")
+
+    def eventFilter(self, obj, event):
+        return super().eventFilter(obj, event)
+
+    def _on_prev_clicked(self):
+        self.previous_requested.emit()
+
+    def _on_next_clicked(self):
+        self.next_requested.emit()

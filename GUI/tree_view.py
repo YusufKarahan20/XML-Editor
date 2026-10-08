@@ -89,7 +89,13 @@ class XmlTreePanel(QWidget):
         xml_root = tree.getroot()
 
         def _recursive_build(xml_el):
-            node = _create_item(xml_el.tag)
+            if isinstance(xml_el.tag, str):
+                qname = etree.QName(xml_el)
+                display_tag = f"{xml_el.prefix}:{qname.localname}" if xml_el.prefix else qname.localname
+            else:
+                display_tag = str(xml_el.tag)
+                
+            node = _create_item(display_tag)
             for child in xml_el:
                 child_node = _recursive_build(child)
                 node.appendRow(child_node)

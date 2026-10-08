@@ -20,13 +20,14 @@ from PyQt6.QtCore import Qt
 
 class _GridNode:
     """Lightweight node holding element name, optional value, and children."""
-    __slots__ = ("element", "value", "children", "is_expanded")
+    __slots__ = ("element", "value", "children", "is_expanded", "lxml_element")
 
     def __init__(self, element: str, value: str = "", children: list[_GridNode] | None = None):
         self.element = element
         self.value = value
         self.children = children or []
         self.is_expanded = False
+        self.lxml_element = None
 
     def append_child(self, child: _GridNode) -> _GridNode:
         self.children.append(child)
@@ -118,9 +119,10 @@ class ExpandableFrame(QFrame):
 class TableDisplayWidget(QWidget):
     """Renders repeating XML elements as a nested table."""
 
-    def __init__(self, element_name: str, items: list[_GridNode], on_rebuild, parent=None):
+    def __init__(self, element_name: str, items: list[_GridNode], on_rebuild, grid_panel=None, parent=None):
         super().__init__(parent)
         self.on_rebuild = on_rebuild
+        self.grid_panel = grid_panel
         self.items = items
         
         main_layout = QVBoxLayout(self)
@@ -215,10 +217,22 @@ class TableDisplayWidget(QWidget):
             
         # Satırları oluşturma
         for r, item in enumerate(items):
+            is_target_row = False
+            is_target_val = False
+            if self.grid_panel and self.grid_panel._target_search_result and item.lxml_element is self.grid_panel._target_search_result.element:
+                if self.grid_panel._target_search_result.match_type == "Element":
+                    is_target_row = True
+                else:
+                    is_target_val = True
+
             # Row number
             row_lbl = QLabel(str(r + 1))
             row_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignTop)
-            row_lbl.setStyleSheet("background: #f0f0f0; padding: 6px; font-size: 11px; color: #888; border: none;")
+            if is_target_row:
+                row_lbl.setStyleSheet("background: #fffacd; padding: 6px; font-size: 11px; color: #888; border: none;")
+                self.grid_panel._target_widget = row_lbl
+            else:
+                row_lbl.setStyleSheet("background: #f0f0f0; padding: 6px; font-size: 11px; color: #888; border: none;")
             grid_layout.addWidget(row_lbl, r + 1, 0)
             
             current_col = 1
@@ -250,7 +264,11 @@ class TableDisplayWidget(QWidget):
             if not item.children or (len(item.children) == 1 and item.children[0].element == "@xmlns"):
                 val_lbl = QLabel(item.value)
                 val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-                val_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none;")
+                if is_target_val:
+                    val_lbl.setStyleSheet("background: #fffacd; padding: 6px; border: none;")
+                    self.grid_panel._target_widget = val_lbl
+                else:
+                    val_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none;")
                 grid_layout.addWidget(val_lbl, r + 1, current_col)
             else:
                 for c, col_name in enumerate(columns):
@@ -263,13 +281,27 @@ class TableDisplayWidget(QWidget):
                     cell_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
                     
                     if child_node:
+                        is_child_target_elem = False
+                        is_child_target_val = False
+                        if self.grid_panel and self.grid_panel._target_search_result and child_node.lxml_element is self.grid_panel._target_search_result.element:
+                            if self.grid_panel._target_search_result.match_type == "Element":
+                                is_child_target_elem = True
+                                cell_widget.setStyleSheet("background: #fffacd; border: none;")
+                                self.grid_panel._target_widget = cell_widget
+                            else:
+                                is_child_target_val = True
+
                         if not child_node.children:
                             lbl = QLabel(child_node.value)
-                            lbl.setStyleSheet("background: transparent; border: none;") 
+                            if is_child_target_val:
+                                lbl.setStyleSheet("background: #fffacd; border: none;")
+                                self.grid_panel._target_widget = lbl
+                            else:
+                                lbl.setStyleSheet("background: transparent; border: none;") 
                             lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                             cell_layout.addWidget(lbl)
                         else:
-                            nested = render_node(child_node, self.on_rebuild)
+                            nested = render_node(child_node, self.on_rebuild, self.grid_panel)
                             cell_layout.addWidget(nested)
                     
                     grid_layout.addWidget(cell_widget, r + 1, current_col + c)
@@ -281,7 +313,7 @@ class TableDisplayWidget(QWidget):
         self.on_rebuild()
 
 
-def render_node(node: _GridNode, on_rebuild) -> QWidget:
+def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
     """Recursively render a node as a widget."""
     if not node.children:
         w = QWidget()
@@ -294,6 +326,16 @@ def render_node(node: _GridNode, on_rebuild) -> QWidget:
         l.addWidget(lbl_elem)
         l.addWidget(lbl_val)
         l.addStretch()
+
+        if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
+            res = grid_panel._target_search_result
+            if res.match_type == "Value":
+                lbl_val.setStyleSheet("background-color: #fffacd; color: #1e1e1e;")
+                grid_panel._target_widget = lbl_val
+            else:
+                w.setStyleSheet("background-color: #fffacd;")
+                grid_panel._target_widget = w
+
         return w
         
     # Group children to detect repeats
@@ -302,6 +344,11 @@ def render_node(node: _GridNode, on_rebuild) -> QWidget:
         groups.setdefault(c.element, []).append(c)
         
     frame = ExpandableFrame(node, on_rebuild)
+
+    if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
+        if grid_panel._target_search_result.match_type == "Element":
+            frame.header_widget.setStyleSheet("background-color: #fffacd;")
+            grid_panel._target_widget = frame.header_widget
     
     if node.is_expanded:
         if "@xmlns" in groups:
@@ -325,9 +372,9 @@ def render_node(node: _GridNode, on_rebuild) -> QWidget:
 
         for element_name, items in groups.items():
             if len(items) == 1:
-                frame.add_widget(render_node(items[0], on_rebuild))
+                frame.add_widget(render_node(items[0], on_rebuild, grid_panel))
             else:
-                frame.add_widget(TableDisplayWidget(element_name, items, on_rebuild))
+                frame.add_widget(TableDisplayWidget(element_name, items, on_rebuild, grid_panel))
             
     return frame
 
@@ -337,12 +384,13 @@ def render_node(node: _GridNode, on_rebuild) -> QWidget:
 # =====================================================================
 #  XML Parser
 # =====================================================================
-def _parse_xml_to_grid(filepath: str) -> _GridNode:
+def _parse_xml_to_grid(filepath: str, xml_root=None) -> _GridNode:
     root = _GridNode("")
     root.is_expanded = True
     
-    tree = etree.parse(filepath)
-    xml_root = tree.getroot()
+    if xml_root is None:
+        tree = etree.parse(filepath)
+        xml_root = tree.getroot()
     
     def _recursive_parse(xml_el, parent_nsmap=None):
         if parent_nsmap is None:
@@ -366,9 +414,11 @@ def _parse_xml_to_grid(filepath: str) -> _GridNode:
             
         text_val = (xml_el.text or "").strip()
         node = _GridNode(display_tag, text_val)
+        node.lxml_element = xml_el
         
         if local_ns:
             ns_node = _GridNode("@xmlns")
+            ns_node.lxml_element = xml_el
             for pfx, uri in local_ns.items():
                 pfx_str = f"xmlns:{pfx}" if pfx else "xmlns"
                 ns_node.append_child(_GridNode(pfx_str, uri))
@@ -398,6 +448,8 @@ class XmlGridPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._target_search_result = None
+        self._target_widget = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -424,10 +476,54 @@ class XmlGridPanel(QWidget):
         self._demo_root = _GridNode("")
         self._rebuild()
         
-    def load_xml(self, filepath: str):
+    def load_xml(self, filepath: str, xml_root=None):
         """Load XML from filepath and update the grid view."""
-        self._demo_root = _parse_xml_to_grid(filepath)
+        self._demo_root = _parse_xml_to_grid(filepath, xml_root)
+        self._target_search_result = None
+        self._target_widget = None
         self._rebuild()
+
+    def navigate_to_element(self, search_result):
+        if not self._demo_root: return
+        
+        # 1. Find path to element
+        def find_path(node, target_el):
+            if node.lxml_element is target_el:
+                return [node]
+            for child in node.children:
+                p = find_path(child, target_el)
+                if p:
+                    return [node] + p
+            return []
+            
+        path = find_path(self._demo_root, search_result.element)
+        if not path:
+            return
+            
+        # 2. Expand all parents AND the representative (first sibling) for TableDisplayWidgets
+        for i in range(1, len(path)):
+            current_node = path[i]
+            parent_node = path[i-1]
+            
+            # Ensure the parent is expanded so it renders its children
+            parent_node.is_expanded = True
+            
+            # If current_node is part of a repeated group (TableDisplayWidget), 
+            # its visibility is controlled by the first item in that group.
+            first_sibling = next((c for c in parent_node.children if c.element == current_node.element), None)
+            if first_sibling:
+                first_sibling.is_expanded = True
+            
+        self._target_search_result = search_result
+        self._target_widget = None
+        
+        # 3. Rebuild (will highlight and find widget)
+        self._rebuild()
+        
+        # 4. Scroll after UI update
+        if self._target_widget:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(10, lambda: self.scroll_area.ensureWidgetVisible(self._target_widget))
 
     def _rebuild(self):
         """Rebuilds the entire UI from the data model state."""
@@ -440,6 +536,6 @@ class XmlGridPanel(QWidget):
         # If the root is a hidden root with children, render children
         if self._demo_root.element == "" and self._demo_root.children:
             for child in self._demo_root.children:
-                self.content_layout.addWidget(render_node(child, self._rebuild))
+                self.content_layout.addWidget(render_node(child, self._rebuild, self))
         else:
-            self.content_layout.addWidget(render_node(self._demo_root, self._rebuild))
+            self.content_layout.addWidget(render_node(self._demo_root, self._rebuild, self))

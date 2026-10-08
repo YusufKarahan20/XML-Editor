@@ -21,11 +21,11 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtCore import Qt, QSize
 from lxml import etree
-
-from GUI.tree_view import XmlTreePanel
 from GUI.center_panel import CenterPanel
+from SEARCH.engine import search_xml
 from GUI.json_preview import JsonPreviewPanel
 from GUI.search_panel import SearchPanel
+from SEARCH.result_list import SearchResultsPanel
 
 
 class MainWindow(QMainWindow):
@@ -52,8 +52,8 @@ class MainWindow(QMainWindow):
         self._create_toolbar()
         self._create_central_area()
         self._create_status_bar()
-        
         self.current_xml_path = None
+        self.current_xml_root = None
         self.update_status(state="No XML file opened")
 
     # ==================================================================
@@ -193,6 +193,7 @@ class MainWindow(QMainWindow):
 
         # Embed the search panel
         self.search_panel = SearchPanel()
+        self.search_panel.search_requested.connect(self._perform_search)
         tb.addWidget(self.search_panel)
 
         # Spacer to push view toggles to the right
@@ -207,31 +208,43 @@ class MainWindow(QMainWindow):
     #  CENTRAL AREA — three resizable panels
     # ==================================================================
     def _create_central_area(self):
-        """Set up the three-panel layout with QSplitter."""
+        """Set up the two-panel layout with QSplitter."""
 
         # Create panels
-        self.tree_panel = XmlTreePanel()
         self.center_panel = CenterPanel()
         self.json_panel = JsonPreviewPanel()
 
-        # Horizontal splitter: Tree | Center | JSON
+        # Horizontal splitter: Center | JSON
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.main_splitter.setHandleWidth(3)
-        self.main_splitter.addWidget(self.tree_panel)
         self.main_splitter.addWidget(self.center_panel)
         self.main_splitter.addWidget(self.json_panel)
 
-        # Default proportions: 25% / 45% / 30%
-        self.main_splitter.setStretchFactor(0, 25)
-        self.main_splitter.setStretchFactor(1, 45)
-        self.main_splitter.setStretchFactor(2, 30)
+        # Default proportions: 70% / 30%
+        self.main_splitter.setStretchFactor(0, 70)
+        self.main_splitter.setStretchFactor(1, 30)
+
+        # Search Results Panel
+        self.search_results_panel = SearchResultsPanel()
+        self.search_results_panel.hide()
+        self.search_results_panel.close_requested.connect(self.search_results_panel.hide)
+        self.search_panel.previous_requested.connect(self.search_results_panel.select_previous)
+        self.search_panel.next_requested.connect(self.search_results_panel.select_next)
+        self.search_results_panel.result_selected.connect(self.center_panel.navigate_to_element)
+
+        # Vertical splitter: Main Splitter | Search Results Panel
+        self.v_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.v_splitter.addWidget(self.main_splitter)
+        self.v_splitter.addWidget(self.search_results_panel)
+        self.v_splitter.setStretchFactor(0, 80)
+        self.v_splitter.setStretchFactor(1, 20)
 
         # Wrap in a central widget
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(6, 6, 6, 6)
         central_layout.setSpacing(0)
-        central_layout.addWidget(self.main_splitter)
+        central_layout.addWidget(self.v_splitter)
         self.setCentralWidget(central)
         
         # Hide JSON preview by default
@@ -291,7 +304,8 @@ class MainWindow(QMainWindow):
         """Validates and loads the XML file into all views."""
         # 1. Validate XML first
         try:
-            etree.parse(filepath)
+            tree = etree.parse(filepath)
+            self.current_xml_root = tree.getroot()
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -302,18 +316,46 @@ class MainWindow(QMainWindow):
             
         # 2. XML is valid, update the views
         try:
-            self.tree_panel.load_xml(filepath)
-            self.center_panel.load_xml(filepath)
+            self.center_panel.load_xml(filepath, self.current_xml_root)
             
             self.current_xml_path = filepath
             filename = Path(filepath).name
-            self.update_status(state=f"Opened: {filename}")
+            
+            # Calculate total element nodes (ignoring text, comments, attributes)
+            node_count = sum(1 for _ in self.current_xml_root.iter("*"))
+            
+            self.update_status(state=f"Opened: {filename}", nodes=node_count)
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "XML Load Error",
                 f"An error occurred while populating the views:\n\n{e}"
             )
+
+    # ==================================================================
+    #  SEARCH HANDLING
+    # ==================================================================
+    def _perform_search(self, query: str):
+        if not query.strip():
+            self.search_panel.show_error("Lütfen arama metni girin.")
+            self.search_results_panel.hide()
+            self.update_status(matches=0)
+            return
+
+        if self.current_xml_root is None:
+            self.search_panel.show_error("Arama yapılacak XML dosyası bulunamadı.")
+            self.search_results_panel.hide()
+            return
+            
+        results = search_xml(self.current_xml_root, query)
+        self.search_panel.show_results(len(results))
+        self.update_status(matches=len(results))
+        
+        if not results:
+            self.search_results_panel.hide()
+        else:
+            self.search_results_panel.update_results(results)
+            self.search_results_panel.show()
 
     # ==================================================================
     #  PLACEHOLDER SLOTS
