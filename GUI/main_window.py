@@ -26,6 +26,8 @@ from SEARCH.engine import search_xml
 from GUI.json_preview import JsonPreviewPanel
 from GUI.search_panel import SearchPanel
 from SEARCH.result_list import SearchResultsPanel
+from GUI.filter_view import FilterPanel
+from FILTER.engine import apply_filter
 
 
 class MainWindow(QMainWindow):
@@ -114,8 +116,8 @@ class MainWindow(QMainWindow):
         _action("search_prev",  "Previous Result","Shift+F3",     "Jump to previous result")
 
         # ── Filter ───────────────────────────────────────────────────
-        _action("filter_apply", "Apply Filter",   None, "Apply current filter")
-        _action("filter_clear", "Clear Filter",   None, "Clear active filter")
+        _action("filter_apply", "Filter Explorer",     None, "Toggle Filter Explorer", slot=self._toggle_filter_panel)
+        _action("filter_clear", "Clear Filter",   None, "Clear active filter", slot=self._on_filter_cleared)
 
         # ── Convert ──────────────────────────────────────────────────
         _action("convert_to_json",   "XML → JSON",  None, "Convert XML to JSON")
@@ -224,7 +226,7 @@ class MainWindow(QMainWindow):
         self.main_splitter.setStretchFactor(0, 70)
         self.main_splitter.setStretchFactor(1, 30)
 
-        # Search Results Panel
+        # Search Results Panel (remains at the bottom of the work area)
         self.search_results_panel = SearchResultsPanel()
         self.search_results_panel.hide()
         self.search_results_panel.close_requested.connect(self.search_results_panel.hide)
@@ -232,19 +234,34 @@ class MainWindow(QMainWindow):
         self.search_panel.next_requested.connect(self.search_results_panel.select_next)
         self.search_results_panel.result_selected.connect(self.center_panel.navigate_to_element)
 
-        # Vertical splitter: Main Splitter | Search Results Panel
-        self.v_splitter = QSplitter(Qt.Orientation.Vertical)
-        self.v_splitter.addWidget(self.main_splitter)
-        self.v_splitter.addWidget(self.search_results_panel)
-        self.v_splitter.setStretchFactor(0, 80)
-        self.v_splitter.setStretchFactor(1, 20)
+        # Filter Panel (Filter Explorer on the left)
+        self.filter_panel = FilterPanel()
+        self.filter_panel.hide()
+        self.filter_panel.close_requested.connect(self.filter_panel.hide)
+        self.filter_panel.filter_changed.connect(self._on_filter_changed)
+        self.filter_panel.filter_applied.connect(self._on_filter_changed)
+        self.filter_panel.filter_cleared.connect(self._on_filter_cleared)
+
+        # Vertical splitter for work area: (Center | JSON) on top, Search Results at bottom
+        self.work_v_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.work_v_splitter.addWidget(self.main_splitter)
+        self.work_v_splitter.addWidget(self.search_results_panel)
+        self.work_v_splitter.setStretchFactor(0, 85)
+        self.work_v_splitter.setStretchFactor(1, 15)
+
+        # Horizontal outer splitter: Filter Explorer on Left | Work Area on Right
+        self.h_main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.h_main_splitter.addWidget(self.filter_panel)
+        self.h_main_splitter.addWidget(self.work_v_splitter)
+        self.h_main_splitter.setStretchFactor(0, 25)
+        self.h_main_splitter.setStretchFactor(1, 75)
 
         # Wrap in a central widget
         central = QWidget()
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(6, 6, 6, 6)
         central_layout.setSpacing(0)
-        central_layout.addWidget(self.v_splitter)
+        central_layout.addWidget(self.h_main_splitter)
         self.setCentralWidget(central)
         
         # Hide JSON preview by default
@@ -317,6 +334,7 @@ class MainWindow(QMainWindow):
         # 2. XML is valid, update the views
         try:
             self.center_panel.load_xml(filepath, self.current_xml_root)
+            self.filter_panel.load_xml_root(self.current_xml_root)
             
             self.current_xml_path = filepath
             filename = Path(filepath).name
@@ -356,6 +374,47 @@ class MainWindow(QMainWindow):
         else:
             self.search_results_panel.update_results(results)
             self.search_results_panel.show()
+
+    # ==================================================================
+    #  FILTER HANDLING
+    # ==================================================================
+    def _toggle_filter_panel(self):
+        if self.filter_panel.isVisible():
+            self.filter_panel.hide()
+        else:
+            self.filter_panel.show()
+
+    def _show_filter_panel(self):
+        self.filter_panel.show()
+
+    def _on_filter_changed(self, target: str, path: list[str], condition: str = "", value: str = ""):
+        if self.current_xml_root is None:
+            return
+
+        matched, match_count = apply_filter(self.current_xml_root, target, path, condition, value)
+
+        has_condition = bool(condition and condition not in ("", "(Tümü / Filtresiz)", "(All / None)") and value)
+
+        if path:
+            path_str = " → ".join(path)
+            if has_condition:
+                filter_text = f"{target} → {path_str} {condition} '{value}' ({match_count} matches)"
+            else:
+                filter_text = f"{target} → {path_str} ({match_count} records)"
+        else:
+            if has_condition:
+                filter_text = f"{target} {condition} '{value}' ({match_count} matches)"
+            else:
+                filter_text = f"{target} ({match_count} records)"
+
+        self.center_panel.tabs.setCurrentWidget(self.center_panel.grid_view)
+        self.center_panel.grid_view.apply_filter_results(matched, filter_text, path, condition, value)
+
+    def _on_filter_applied(self, target: str, path: list[str], condition: str = "", value: str = ""):
+        self._on_filter_changed(target, path, condition, value)
+
+    def _on_filter_cleared(self):
+        self.center_panel.grid_view.clear_filter()
 
     # ==================================================================
     #  PLACEHOLDER SLOTS
