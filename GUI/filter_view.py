@@ -22,6 +22,7 @@ class FilterPanel(QWidget):
     filter_changed = pyqtSignal(str, list, str, str)
     filter_applied = pyqtSignal(str, list, str, str)  # Kept for backward compatibility
     filter_cleared = pyqtSignal()
+    target_selected = pyqtSignal(str)
     close_requested = pyqtSignal()
 
     DEFAULT_CONDITION = "(Tümü / Filtresiz)"
@@ -31,6 +32,8 @@ class FilterPanel(QWidget):
         self.current_root = None
         self.path_combos = []  # List of QComboBox for the dynamic path
         self._updating = False
+        self._active_field_is_leaf = False
+        self.MAX_LEVEL = 15
         self._setup_ui()
 
     def _setup_ui(self):
@@ -147,9 +150,7 @@ class FilterPanel(QWidget):
         self.combo_target.clear()
 
         self._clear_path_from_level(0)
-        self.combo_condition.setCurrentIndex(0)
-        self.combo_value.clear()
-        self.cond_frame.hide()
+        self._reset_condition()
 
         if root is not None:
             self.combo_target.addItem("-- Select Target --")
@@ -160,6 +161,20 @@ class FilterPanel(QWidget):
         self.combo_target.blockSignals(False)
         self._updating = False
 
+    def _reset_condition(self):
+        """Resets condition and value controls to initial state and hides the frame."""
+        self._active_field_is_leaf = False
+        self.combo_condition.blockSignals(True)
+        self.combo_condition.setCurrentIndex(0)
+        self.combo_condition.blockSignals(False)
+
+        self.combo_value.blockSignals(True)
+        self.combo_value.clear()
+        self.combo_value.setEnabled(False)
+        self.combo_value.blockSignals(False)
+
+        self.cond_frame.hide()
+
     def _clear_path_from_level(self, level_index: int):
         """Removes all path combo boxes starting from level_index."""
         while len(self.path_combos) > level_index:
@@ -168,9 +183,8 @@ class FilterPanel(QWidget):
             self.path_layout.removeWidget(container)
             container.deleteLater()
 
-        # If path is cleared below a leaf, hide or adjust condition
         if not self.path_combos:
-            self.cond_frame.hide()
+            self._reset_condition()
 
     PLACEHOLDER_TEXT = "-- Tümü / Seçiniz --"
 
@@ -179,7 +193,8 @@ class FilterPanel(QWidget):
         if up_to_index is None:
             up_to_index = len(self.path_combos)
         path = []
-        for i in range(up_to_index):
+        limit = min(up_to_index, len(self.path_combos))
+        for i in range(limit):
             text = self.path_combos[i]["combo"].currentText().strip()
             if text and not text.startswith("--"):
                 path.append(text)
@@ -195,30 +210,64 @@ class FilterPanel(QWidget):
 
         self._updating = True
         self._clear_path_from_level(0)
-        self.combo_condition.setCurrentIndex(0)
-        self.combo_value.clear()
-        self.cond_frame.hide()
+        self._reset_condition()
 
         target = self.combo_target.currentText().strip()
         if target and target != "-- Select Target --" and self.current_root is not None:
+            # Rule 1: Only prepare first-level field options. Do NOT filter yet.
             self._evaluate_level(target, [])
         self._updating = False
 
         if target == "-- Select Target --" or not target:
             self.filter_cleared.emit()
         else:
-            self._emit_filter_changed()
+            self.target_selected.emit(target)
 
-    def _on_path_changed(self, index: int):
+    def _on_path_changed(self, index: int = -1):
         """Called when a path level combo box selection changes."""
         if self._updating:
             return
 
-        self._updating = True
-        self._clear_path_from_level(index + 1)
-        target = self.combo_target.currentText().strip()
-        path = self._get_current_path()
+        # Rule 2: Dynamically identify sender index to prevent closure index drift
+        sender_widget = self.sender()
+        idx = -1
+        if sender_widget is not None:
+            for i, item in enumerate(self.path_combos):
+                if item["combo"] is sender_widget:
+                    idx = i
+                    break
+        if idx == -1:
+            idx = index
 
+        if idx < 0 or idx >= len(self.path_combos):
+            return
+
+        self._updating = True
+        # Rule 2: Remove all combo boxes below this level
+        self._clear_path_from_level(idx + 1)
+        # Rule 3: Always reset previous condition and value when level changes
+        self._reset_condition()
+
+        target = self.combo_target.currentText().strip()
+        selected_text = self.path_combos[idx]["combo"].currentText().strip()
+        is_placeholder = bool(not selected_text or selected_text.startswith("--"))
+
+        if is_placeholder:
+            # Rule 2: Placeholder selected -> NEVER call _evaluate_level!
+            self._updating = False
+            if idx == 0:
+                # Level 1 placeholder selected -> target still selected, restore view expanded to target
+                if target and target != "-- Select Target --":
+                    self.target_selected.emit(target)
+                else:
+                    self.filter_cleared.emit()
+            else:
+                # Sub-level reverted to placeholder -> filter at parent level if path exists
+                self._emit_filter_changed()
+            return
+
+        # Valid field chosen at this level:
+        path = self._get_current_path(idx + 1)
         if target and target != "-- Select Target --" and self.current_root is not None:
             self._evaluate_level(target, path)
         self._updating = False
@@ -227,10 +276,20 @@ class FilterPanel(QWidget):
 
     def _evaluate_level(self, target: str, current_path: list[str]):
         """Decides whether to add another path level or populate leaf condition/value."""
-        next_levels = get_next_level(self.current_root, target, current_path)
+        try:
+            next_levels = get_next_level(self.current_root, target, current_path)
+        except Exception:
+            next_levels = []
 
         if next_levels:
-            # It's a container node. Add next level combo box with placeholder default.
+            # Container node: reset and hide condition/value
+            self._active_field_is_leaf = False
+            self.cond_frame.hide()
+
+            # Rule 2: Controlled behavior on max level boundary
+            if len(self.path_combos) >= self.MAX_LEVEL:
+                return
+
             level_container = QWidget()
             lvl_layout = QVBoxLayout(level_container)
             lvl_layout.setContentsMargins(0, 0, 0, 0)
@@ -246,39 +305,36 @@ class FilterPanel(QWidget):
             combo.addItems(next_levels)
             combo.setCurrentIndex(0)
 
-            combo_index = len(self.path_combos)
-            combo.currentIndexChanged.connect(lambda _, idx=combo_index: self._on_path_changed(idx))
+            # Connect signal; _on_path_changed resolves sender dynamically
+            combo.currentIndexChanged.connect(self._on_path_changed)
 
             lvl_layout.addWidget(combo)
             self.path_combos.append({"combo": combo, "container": level_container})
             self.path_layout.addWidget(level_container)
-
-            # Hide condition frame while waiting at container or placeholder
-            self.cond_frame.hide()
         else:
-            # It's a leaf node. Populate valid values and show condition section.
+            # Leaf node: populate condition/value with fresh clean state
             if current_path:
-                prev_val = self.combo_value.currentText().strip()
-                values = get_values_for_path(self.current_root, target, current_path)
+                self._active_field_is_leaf = True
+                try:
+                    values = get_values_for_path(self.current_root, target, current_path)
+                except Exception:
+                    values = []
 
                 self.combo_value.blockSignals(True)
                 self.combo_value.clear()
                 if values:
                     self.combo_value.addItems(values)
+                self.combo_value.setEnabled(False)
                 self.combo_value.blockSignals(False)
 
-                # Requirement 4: Verify if previous condition/value is still valid for the new selection
-                if prev_val and prev_val in values:
-                    self.combo_value.setCurrentText(prev_val)
-                else:
-                    # Previous value is invalid for new path, reset to unconditional view
-                    self.combo_condition.blockSignals(True)
-                    self.combo_condition.setCurrentIndex(0)
-                    self.combo_condition.blockSignals(False)
-                    self.combo_value.setEnabled(False)
+                # Rule 3: Fresh clean state for condition
+                self.combo_condition.blockSignals(True)
+                self.combo_condition.setCurrentIndex(0)
+                self.combo_condition.blockSignals(False)
 
                 self.cond_frame.show()
             else:
+                self._active_field_is_leaf = False
                 self.cond_frame.hide()
 
     def _on_condition_changed(self):
@@ -299,7 +355,6 @@ class FilterPanel(QWidget):
         if self._updating:
             return
 
-        # Only emit if condition is active
         cond = self.combo_condition.currentText()
         if cond != self.DEFAULT_CONDITION:
             self._emit_filter_changed()
@@ -311,12 +366,18 @@ class FilterPanel(QWidget):
             return
 
         path = self._get_current_path()
-        condition = self.combo_condition.currentText()
-        value = self.combo_value.currentText().strip()
+        if not path:
+            # Rule 1: No valid field selected yet, do not emit filter
+            return
 
-        if condition == self.DEFAULT_CONDITION or not condition:
-            condition = ""
-            value = ""
+        # Rule 3: Validate both active leaf state and frame visibility
+        condition = ""
+        value = ""
+        if self._active_field_is_leaf and not self.cond_frame.isHidden():
+            cond_text = self.combo_condition.currentText().strip()
+            if cond_text and cond_text != self.DEFAULT_CONDITION:
+                condition = cond_text
+                value = self.combo_value.currentText().strip()
 
         self.filter_changed.emit(target, path, condition, value)
         self.filter_applied.emit(target, path, condition, value)
@@ -329,10 +390,9 @@ class FilterPanel(QWidget):
         self.combo_target.blockSignals(False)
 
         self._clear_path_from_level(0)
-        self.combo_condition.setCurrentIndex(0)
-        self.combo_value.clear()
-        self.cond_frame.hide()
+        self._reset_condition()
         self._updating = False
 
         self.filter_cleared.emit()
+
 

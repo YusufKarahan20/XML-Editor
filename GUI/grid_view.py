@@ -44,7 +44,7 @@ class HeaderWidget(QWidget):
         self.toggle_callback = toggle_callback
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(6)
         
         self.toggle_btn = QPushButton("-" if node.is_expanded else "+")
@@ -69,7 +69,7 @@ class HeaderWidget(QWidget):
         self.toggle_btn.clicked.connect(self.toggle_callback)
         
         self.title_label = QLabel(node.element)
-        self.title_label.setStyleSheet("font-weight: bold; color: #1e1e1e; font-size: 12px;")
+        self.title_label.setStyleSheet("font-weight: bold; color: #1e1e1e; font-size: 12px; background: transparent;")
         self.title_label.setCursor(Qt.CursorShape.PointingHandCursor)
         
         layout.addWidget(self.toggle_btn)
@@ -82,12 +82,21 @@ class HeaderWidget(QWidget):
             event.accept()
 
 class ExpandableFrame(QFrame):
-    """A generic frame that can be expanded/collapsed."""
+    """A generic frame that can be expanded/collapsed with Altova XMLSpy-style border and header."""
 
     def __init__(self, node: _GridNode, on_rebuild, parent=None):
         super().__init__(parent)
         self.node = node
         self.on_rebuild = on_rebuild
+        
+        self.setObjectName("expandableFrame")
+        self.setStyleSheet("""
+            QFrame#expandableFrame {
+                border: 1px solid #d4d8dc;
+                border-radius: 3px;
+                background-color: #ffffff;
+            }
+        """)
         
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
@@ -95,14 +104,33 @@ class ExpandableFrame(QFrame):
         
         # Header
         self.header_widget = HeaderWidget(node, self.toggle)
+        self.header_widget.setObjectName("expandableHeader")
+        if node.is_expanded:
+            self.header_widget.setStyleSheet("""
+                QWidget#expandableHeader {
+                    background-color: #f1f4f8;
+                    border-bottom: 1px solid #d4d8dc;
+                    border-top-left-radius: 3px;
+                    border-top-right-radius: 3px;
+                }
+            """)
+        else:
+            self.header_widget.setStyleSheet("""
+                QWidget#expandableHeader {
+                    background-color: #f8fafc;
+                    border-radius: 3px;
+                }
+            """)
         self.main_layout.addWidget(self.header_widget)
 
         # Content is ONLY created if expanded (data-driven view)
         if node.is_expanded:
             self.content_widget = QWidget()
+            self.content_widget.setObjectName("expandableContent")
+            self.content_widget.setStyleSheet("QWidget#expandableContent { background-color: #ffffff; border-bottom-left-radius: 3px; border-bottom-right-radius: 3px; }")
             self.content_layout = QVBoxLayout(self.content_widget)
-            self.content_layout.setContentsMargins(20, 2, 0, 4)
-            self.content_layout.setSpacing(4)
+            self.content_layout.setContentsMargins(10, 6, 10, 6)
+            self.content_layout.setSpacing(6)
             self.main_layout.addWidget(self.content_widget)
         else:
             self.content_layout = None
@@ -323,7 +351,7 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
     if not node.children:
         w = QWidget()
         l = QHBoxLayout(w)
-        l.setContentsMargins(0, 0, 0, 0)
+        l.setContentsMargins(4, 2, 4, 2)
         l.setSpacing(8)
         lbl_elem = QLabel(f"<b>{node.element}</b>")
         lbl_elem.setStyleSheet("color: #1e1e1e;")
@@ -338,7 +366,7 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
                 lbl_val.setStyleSheet("background-color: #fffacd; color: #1e1e1e;")
                 grid_panel._target_widget = lbl_val
             else:
-                w.setStyleSheet("background-color: #fffacd;")
+                w.setStyleSheet("background-color: #fffacd; border-radius: 2px;")
                 grid_panel._target_widget = w
 
         return w
@@ -352,7 +380,22 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
 
     if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
         if grid_panel._target_search_result.match_type == "Element":
-            frame.header_widget.setStyleSheet("background-color: #fffacd;")
+            if node.is_expanded:
+                frame.header_widget.setStyleSheet("""
+                    QWidget#expandableHeader {
+                        background-color: #fffacd;
+                        border-bottom: 1px solid #d4d8dc;
+                        border-top-left-radius: 3px;
+                        border-top-right-radius: 3px;
+                    }
+                """)
+            else:
+                frame.header_widget.setStyleSheet("""
+                    QWidget#expandableHeader {
+                        background-color: #fffacd;
+                        border-radius: 3px;
+                    }
+                """)
             grid_panel._target_widget = frame.header_widget
     
     if node.is_expanded:
@@ -458,6 +501,40 @@ def _local_name(node: _GridNode) -> str:
         loc = t.split("}", 1)[1] if "}" in t else t
     return loc
 
+def _get_node_text(node: _GridNode) -> str:
+    """
+    Central helper to extract text value from a grid node for filtering.
+    Prioritizes node.value, falling back to node.lxml_element.text or child Text nodes
+    when local xmlns declarations cause node.value to be empty in the grid model.
+    """
+    if node is None:
+        return ""
+    if node.value is not None and node.value.strip():
+        return node.value.strip()
+    if node.lxml_element is not None and node.lxml_element.text and node.lxml_element.text.strip():
+        return node.lxml_element.text.strip()
+    for child in node.children:
+        if child.element == "Text" and child.value is not None and child.value.strip():
+            return child.value.strip()
+    if node.value is not None:
+        return node.value.strip()
+    return ""
+
+def _check_condition(text: str, condition: str, value: str) -> bool:
+    """Evaluates filter condition against text."""
+    if condition == "Equals":
+        return text == value
+    elif condition == "Not Equals":
+        return text != value
+    elif condition == "Contains":
+        return value in text
+    elif condition == "Starts With":
+        return text.startswith(value)
+    elif condition == "Ends With":
+        return text.endswith(value)
+    return False
+
+
 def _check_node_matches_subpath(node: _GridNode, subpath: list[str], condition: str, value: str) -> bool:
     """Checks whether the node or its descendants match the condition along the subpath."""
     if not subpath:
@@ -471,12 +548,9 @@ def _check_node_matches_subpath(node: _GridNode, subpath: list[str], condition: 
             if _local_name(child) == level_name:
                 if not has_condition:
                     return True
-                text = (child.value or "").strip()
-                if condition == "Equals" and text == value: return True
-                elif condition == "Not Equals" and text != value: return True
-                elif condition == "Contains" and value in text: return True
-                elif condition == "Starts With" and text.startswith(value): return True
-                elif condition == "Ends With" and text.endswith(value): return True
+                text = _get_node_text(child)
+                if _check_condition(text, condition, value):
+                    return True
         return False
 
     for child in node.children:
@@ -529,7 +603,7 @@ def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value:
     is_table_rows = len(matching_children) > 1
 
     if is_table_rows:
-        # Repeating table rows found at this level (e.g. ACTIVATED_ORDERS)
+        # Repeating table rows found at this level (e.g. ACTIVATED_ORDERS or PRODUCT_CHAR_VALUE)
         children_to_remove = []
         any_kept = False
         remaining_subpath = subpath[1:]
@@ -541,9 +615,11 @@ def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value:
                 if matches:
                     any_kept = True
                     child.is_expanded = True
-                    # All columns of this row are kept intact!
-                    # Dynamically expand matching subpath nodes so selected fields inside this row are visible
-                    if remaining_subpath:
+                    # If this table row contains deeper subpaths, prune inner levels as well
+                    if len(remaining_subpath) > 1:
+                        _prune_grid_node(child, remaining_subpath, condition, value)
+                    elif remaining_subpath:
+                        # Direct leaf of this table row: preserve all columns of the row and expand to leaf
                         _expand_path_nodes(child, remaining_subpath)
                 else:
                     children_to_remove.append(child)
@@ -565,15 +641,8 @@ def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value:
         for child in node.children:
             if _local_name(child) == level_name:
                 if has_condition:
-                    text = (child.value or "").strip()
-                    match = False
-                    if condition == "Equals" and text == value: match = True
-                    elif condition == "Not Equals" and text != value: match = True
-                    elif condition == "Contains" and value in text: match = True
-                    elif condition == "Starts With" and text.startswith(value): match = True
-                    elif condition == "Ends With" and text.endswith(value): match = True
-
-                    if match:
+                    text = _get_node_text(child)
+                    if _check_condition(text, condition, value):
                         any_kept = True
                         child.is_expanded = True
                     else:
@@ -804,3 +873,31 @@ class XmlGridPanel(QWidget):
         if getattr(self, '_current_root', None) is not None:
             self._demo_root = _parse_xml_to_grid("", self._current_root)
             self._rebuild()
+
+    def expand_to_target(self, target_name: str):
+        """
+        Restores the full XML view and expands the root and target node,
+        leaving target children collapsed.
+        """
+        self.filter_status_widget.hide()
+        
+        if getattr(self, '_current_root', None) is not None:
+            self._demo_root = _parse_xml_to_grid("", self._current_root)
+            
+        if not self._demo_root or not self._demo_root.children:
+            return
+            
+        root_node = self._demo_root.children[0]
+        root_node.is_expanded = True
+        
+        for child in root_node.children:
+            if _local_name(child).strip() == target_name.strip():
+                child.is_expanded = True
+                for subchild in child.children:
+                    if subchild.element not in ("@xmlns", "Text"):
+                        subchild.is_expanded = False
+            else:
+                if child.element not in ("@xmlns", "Text"):
+                    child.is_expanded = False
+                    
+        self._rebuild()

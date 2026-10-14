@@ -239,7 +239,7 @@ class MainWindow(QMainWindow):
         self.filter_panel.hide()
         self.filter_panel.close_requested.connect(self.filter_panel.hide)
         self.filter_panel.filter_changed.connect(self._on_filter_changed)
-        self.filter_panel.filter_applied.connect(self._on_filter_changed)
+        self.filter_panel.target_selected.connect(self._on_target_selected)
         self.filter_panel.filter_cleared.connect(self._on_filter_cleared)
 
         # Vertical splitter for work area: (Center | JSON) on top, Search Results at bottom
@@ -391,27 +391,52 @@ class MainWindow(QMainWindow):
         if self.current_xml_root is None:
             return
 
-        matched, match_count = apply_filter(self.current_xml_root, target, path, condition, value)
+        try:
+            matched, match_count = apply_filter(self.current_xml_root, target, path, condition, value)
+        except Exception as e:
+            self.statusBar().showMessage(f"Filtreleme hatası: {str(e)}", 5000)
+            return
 
         has_condition = bool(condition and condition not in ("", "(Tümü / Filtresiz)", "(All / None)") and value)
 
         if path:
             path_str = " → ".join(path)
             if has_condition:
-                filter_text = f"{target} → {path_str} {condition} '{value}' ({match_count} matches)"
+                if match_count == 0:
+                    filter_text = f"{target} → {path_str} {condition} '{value}' (0 matches - Kayıt bulunamadı)"
+                else:
+                    filter_text = f"{target} → {path_str} {condition} '{value}' ({match_count} matches)"
             else:
-                filter_text = f"{target} → {path_str} ({match_count} records)"
+                if match_count == 0:
+                    filter_text = f"{target} → {path_str} (0 records - Kayıt bulunamadı)"
+                else:
+                    filter_text = f"{target} → {path_str} ({match_count} records)"
         else:
             if has_condition:
-                filter_text = f"{target} {condition} '{value}' ({match_count} matches)"
+                if match_count == 0:
+                    filter_text = f"{target} {condition} '{value}' (0 matches - Kayıt bulunamadı)"
+                else:
+                    filter_text = f"{target} {condition} '{value}' ({match_count} matches)"
             else:
-                filter_text = f"{target} ({match_count} records)"
+                if match_count == 0:
+                    filter_text = f"{target} (0 records - Kayıt bulunamadı)"
+                else:
+                    filter_text = f"{target} ({match_count} records)"
+
+        if match_count == 0:
+            self.statusBar().showMessage("Filtre kriterlerine uygun kayıt bulunamadı.", 3000)
 
         self.center_panel.tabs.setCurrentWidget(self.center_panel.grid_view)
         self.center_panel.grid_view.apply_filter_results(matched, filter_text, path, condition, value)
 
     def _on_filter_applied(self, target: str, path: list[str], condition: str = "", value: str = ""):
         self._on_filter_changed(target, path, condition, value)
+
+    def _on_target_selected(self, target: str):
+        if self.current_xml_root is None:
+            return
+        self.center_panel.tabs.setCurrentWidget(self.center_panel.grid_view)
+        self.center_panel.grid_view.expand_to_target(target)
 
     def _on_filter_cleared(self):
         self.center_panel.grid_view.clear_filter()
