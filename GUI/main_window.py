@@ -16,7 +16,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QToolBar, QStatusBar, QLabel, QFileDialog, QMessageBox,
-    QSizePolicy,
+    QSizePolicy, QApplication,
 )
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtCore import Qt, QSize
@@ -28,6 +28,9 @@ from GUI.search_panel import SearchPanel
 from SEARCH.result_list import SearchResultsPanel
 from GUI.filter_view import FilterPanel
 from FILTER.engine import apply_filter
+from CONVERTER.xml_to_json import ConversionConfig, xml_to_json
+from CONVERTER.heuristics import build_smart_array_detector
+from CONVERTER.soap import is_soap_envelope, soap_to_json
 
 
 class MainWindow(QMainWindow):
@@ -56,6 +59,7 @@ class MainWindow(QMainWindow):
         self._create_status_bar()
         self.current_xml_path = None
         self.current_xml_root = None
+        self.soap_numeric_fields = None
         self.update_status(state="No XML file opened")
 
     # ==================================================================
@@ -100,8 +104,10 @@ class MainWindow(QMainWindow):
         # ── Edit ─────────────────────────────────────────────────────
         _action("edit_undo",       "Undo",       "Ctrl+Z",  "Undo last action")
         _action("edit_redo",       "Redo",       "Ctrl+Y",  "Redo last action")
-        _action("edit_copy",       "Copy",       "Ctrl+C",  "Copy selection")
-        _action("edit_select_all", "Select All", "Ctrl+A",  "Select all")
+        _action("edit_copy",       "Copy",       "Ctrl+C",  "Copy selection",
+                slot=self._on_copy)
+        _action("edit_select_all", "Select All", "Ctrl+A",  "Select all",
+                slot=self._on_select_all)
 
         # ── View ─────────────────────────────────────────────────────
         _action("view_tree",  "Tree View",    None, "Switch to tree view")
@@ -120,8 +126,10 @@ class MainWindow(QMainWindow):
         _action("filter_clear", "Clear Filter",   None, "Clear active filter", slot=self._on_filter_cleared)
 
         # ── Convert ──────────────────────────────────────────────────
-        _action("convert_to_json",   "XML → JSON",  None, "Convert XML to JSON")
-        _action("convert_save_json", "Save JSON…",  None, "Save JSON to file")
+        _action("convert_to_json",   "XML → JSON",  None, "Convert XML to JSON",
+                slot=self._on_convert_to_json)
+        _action("convert_save_json", "Save JSON…",  None, "Save JSON to file",
+                slot=self._on_save_json)
 
         # ── Help ─────────────────────────────────────────────────────
         _action("help_about", "About", None, "About XML Analyzer",
@@ -335,6 +343,7 @@ class MainWindow(QMainWindow):
         try:
             self.center_panel.load_xml(filepath, self.current_xml_root)
             self.filter_panel.load_xml_root(self.current_xml_root)
+            self.json_panel.clear()
             
             self.current_xml_path = filepath
             filename = Path(filepath).name
@@ -461,3 +470,144 @@ class MainWindow(QMainWindow):
             "<p>Built with Python 3.12, PyQt6 &amp; lxml.</p>"
             "<p style='color:#6c7086;'>Version 0.1.0-dev</p>",
         )
+
+    # ==================================================================
+    #  CONVERT / JSON HANDLING
+    # ==================================================================
+    def _convert_current_xml_to_json(self) -> str:
+        """
+        Converts active XML tree to JSON.
+        If the active XML is a SOAP envelope, uses specialized SOAP-to-JSON
+        input conversion. Otherwise, uses standard XML-to-JSON with Smart
+        Array Detection.
+        """
+        if self.current_xml_root is None:
+            raise ValueError("No active XML root element to convert.")
+
+        if is_soap_envelope(self.current_xml_root):
+            numeric_fields = getattr(self, "soap_numeric_fields", None)
+            return soap_to_json(self.current_xml_root, numeric_fields=numeric_fields)
+
+        detector = build_smart_array_detector(
+            self.current_xml_root,
+            use_prescan=True,
+            use_heuristics=False,
+        )
+        config = ConversionConfig(force_list=detector)
+        return xml_to_json(self.current_xml_root, config=config)
+
+    def _on_convert_to_json(self):
+        """Converts the active in-memory XML tree to JSON and displays it in JsonPreviewPanel."""
+        if self.current_xml_root is None:
+            QMessageBox.information(
+                self,
+                "XML to JSON",
+                "Dönüştürülecek aktif bir XML dosyası bulunamadı.\nLütfen önce bir XML dosyası açın."
+            )
+            return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.statusBar().showMessage("XML to JSON dönüştürülüyor...", 0)
+        try:
+            json_text = self._convert_current_xml_to_json()
+            self.json_panel.set_json(json_text)
+
+            # Ensure preview panel is visible and keep the View action checked
+            self.json_panel.show()
+            json_action = self.get_action("view_json")
+            if json_action:
+                json_action.setChecked(True)
+
+            self.update_status(state="XML → JSON dönüştürüldü")
+            self.statusBar().showMessage("XML başarıyla JSON'a dönüştürüldü.", 4000)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Conversion Error",
+                f"XML to JSON dönüşümü sırasında bir hata oluştu:\n\n{e}"
+            )
+            self.update_status(state="Dönüşüm başarısız")
+            self.statusBar().showMessage(f"Dönüşüm hatası: {e}", 5000)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _on_save_json(self):
+        """Saves the JSON representation to a file chosen by the user."""
+        if self.current_xml_root is None:
+            QMessageBox.information(
+                self,
+                "Save JSON",
+                "Kaydedilecek aktif bir XML dosyası bulunamadı.\nLütfen önce bir XML dosyası açın."
+            )
+            return
+
+        # If preview is empty, perform conversion on the fly
+        json_text = self.json_panel.get_text().strip()
+        if not json_text:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.statusBar().showMessage("XML to JSON dönüştürülüyor...", 0)
+            try:
+                json_text = self._convert_current_xml_to_json()
+                self.json_panel.set_json(json_text)
+                self.json_panel.show()
+                json_action = self.get_action("view_json")
+                if json_action:
+                    json_action.setChecked(True)
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Conversion Error",
+                    f"JSON oluşturulurken hata oluştu:\n\n{e}"
+                )
+                self.statusBar().showMessage(f"Dönüşüm hatası: {e}", 5000)
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+
+        default_filename = (
+            str(Path(self.current_xml_path).with_suffix(".json"))
+            if self.current_xml_path
+            else "converted.json"
+        )
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save JSON File",
+            default_filename,
+            "JSON Files (*.json);;All Files (*)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(json_text)
+            filename = Path(filepath).name
+            self.statusBar().showMessage(f"JSON başarıyla kaydedildi: {filename}", 5000)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Save Error",
+                f"JSON dosyası kaydedilirken bir hata oluştu:\n\n{e}"
+            )
+            self.statusBar().showMessage(f"Kayıt hatası: {e}", 5000)
+
+    # ==================================================================
+    #  EDIT HANDLING
+    # ==================================================================
+    def _on_copy(self):
+        """Copies selection from the focused widget or JSON preview."""
+        focused = QApplication.focusWidget()
+        if focused and hasattr(focused, "copy"):
+            focused.copy()
+        elif hasattr(self, "json_panel") and self.json_panel.text_edit.textCursor().hasSelection():
+            self.json_panel.text_edit.copy()
+
+    def _on_select_all(self):
+        """Selects all text in the focused widget or JSON preview."""
+        focused = QApplication.focusWidget()
+        if focused and hasattr(focused, "selectAll"):
+            focused.selectAll()
+        elif hasattr(self, "json_panel") and self.json_panel.isVisible():
+            self.json_panel.text_edit.selectAll()
