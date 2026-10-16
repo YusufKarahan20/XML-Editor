@@ -49,6 +49,36 @@ def is_soap_envelope(element: Any) -> bool:
         return False
 
 
+def is_service_payload(element: Any) -> bool:
+    """
+    Checks if an XML element represents a non-SOAP service request or response
+    payload (e.g. tt:getTroubleTicketStatusResponse, cust:createCorporateCustomerRequest).
+
+    Criteria:
+      1. Must be a valid element with child elements (not a leaf or empty tag).
+      2. Must have a namespace or namespace prefix (contract-driven schema).
+      3. Local tag name ends with a standard service operation suffix
+         ('Response' or 'Request', case-insensitive).
+    """
+    if element is None or not hasattr(element, "tag"):
+        return False
+    if not isinstance(element.tag, str):
+        return False
+
+    children = [c for c in element if isinstance(c.tag, str)]
+    if not children:
+        return False
+
+    try:
+        qname = etree.QName(element)
+        localname = qname.localname
+        has_namespace = bool(qname.namespace or element.prefix)
+        is_service_op = localname.lower().endswith(("response", "request"))
+        return has_namespace and is_service_op
+    except (ValueError, TypeError):
+        return False
+
+
 def extract_soap_payload_elements(
     root: etree._Element, unwrap_operation: bool = True
 ) -> list[etree._Element]:
@@ -192,6 +222,24 @@ def _group_elements_by_key(
     return result
 
 
+def _is_soap_mixed_content(element: etree._Element, children: list[etree._Element]) -> bool:
+    """
+    Detects if an element has mixed content (both child elements and
+    meaningful non-whitespace text or tail).
+    """
+    if not children:
+        return False
+
+    if element.text and element.text.strip():
+        return True
+
+    for child in children:
+        if child.tail and child.tail.strip():
+            return True
+
+    return False
+
+
 def _convert_soap_element(
     element: etree._Element,
     numeric_fields: set[str] | Sequence[str] | None = None,
@@ -224,6 +272,41 @@ def _convert_soap_element(
             attr_local = k.split(":")[-1]
         attrs[f"@{attr_local}"] = v
 
+    # Case A: Mixed Content (Text + Elements intermingled)
+    if _is_soap_mixed_content(element, children):
+        tokens: list[dict[str, Any]] = []
+
+        # 1. Text preceding the first child (preserve original whitespace without cropping)
+        if element.text and element.text.strip():
+            tokens.append({"#text": element.text})
+
+        # Precompute keys for children using existing _group_elements_by_key logic
+        child_groups = _group_elements_by_key(children)
+        elem_to_key: dict[etree._Element, str] = {}
+        for k, elem_list in child_groups.items():
+            for elem in elem_list:
+                elem_to_key[elem] = k
+
+        # 2. Iterate children and their respective tails in document order
+        for child in children:
+            child_key = elem_to_key.get(child, etree.QName(child).localname)
+            child_path = f"{path}/{child_key}" if path else child_key
+            child_data = _convert_soap_element(
+                child, numeric_fields=numeric_fields, force_list=force_list, path=child_path
+            )
+            tokens.append({child_key: child_data})
+
+            if child.tail and child.tail.strip():
+                tokens.append({"#text": child.tail})
+
+        result: dict[str, Any] = dict(attrs)
+        if has_nil:
+            result["@nil"] = "true"
+        if result:
+            result["#content"] = tokens
+            return result
+        return {"#content": tokens}
+
     # Case 1: Leaf element (no children)
     if not children:
         if has_nil:
@@ -236,7 +319,8 @@ def _convert_soap_element(
             return None
 
         text = element.text
-        if text is None:
+        is_empty = (text is None) or (isinstance(text, str) and not text.strip())
+        if is_empty:
             if attrs:
                 return attrs
             return None
@@ -381,3 +465,60 @@ def soap_to_json(
         unwrap_operation=unwrap_operation,
     )
     return json.dumps(data, indent=indent, ensure_ascii=ensure_ascii)
+
+
+def build_soap_array_detector(
+    source: etree._Element | str | bytes | Path,
+    unwrap_operation: bool = True,
+    additional_rules: Any = None,
+) -> Callable[[etree._Element, str], bool]:
+    """
+    Builds a SmartArrayDetector callable tailored specifically for SOAP payloads.
+
+    Instead of scanning Envelope/Header/Body structural layers, unwraps the payload
+    first and scans repeating paths matching the exact paths traversed during
+    SOAP conversion (e.g. 'InvoiceList/InvoiceItem').
+
+    Args:
+        source: SOAP XML Envelope element, string/bytes, or file path.
+        unwrap_operation: Whether to unwrap the operation element under SOAP Body.
+        additional_rules: Optional additional set, sequence, or callable rules.
+
+    Returns:
+        Callable predicate matching (element, path) -> bool for force_list.
+    """
+    root = _parse_source(source)
+    if not is_soap_envelope(root):
+        from CONVERTER.heuristics import build_smart_array_detector
+        return build_smart_array_detector(root, additional_rules=additional_rules)
+
+    payload_elements = extract_soap_payload_elements(root, unwrap_operation=unwrap_operation)
+
+    from CONVERTER.heuristics import scan_repeating_paths
+    from CONVERTER.xml_to_json import ConversionConfig
+
+    cfg = ConversionConfig(strip_namespaces=True)
+    repeating_display_paths: set[str] = set()
+
+    for elem in payload_elements:
+        d_paths, _ = scan_repeating_paths(elem, config=cfg)
+        repeating_display_paths.update(d_paths)
+
+    def _soap_detector(element: etree._Element, path: str) -> bool:
+        if additional_rules:
+            if callable(additional_rules):
+                if additional_rules(element, path):
+                    return True
+            elif isinstance(additional_rules, (set, frozenset, list, tuple)):
+                qname = etree.QName(element)
+                if qname.localname in additional_rules or path in additional_rules:
+                    return True
+
+        if path in repeating_display_paths:
+            return True
+        if "/" in path and path.split("/", 1)[1] in repeating_display_paths:
+            return True
+
+        return False
+
+    return _soap_detector

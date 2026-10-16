@@ -30,7 +30,7 @@ from GUI.filter_view import FilterPanel
 from FILTER.engine import apply_filter
 from CONVERTER.xml_to_json import ConversionConfig, xml_to_json
 from CONVERTER.heuristics import build_smart_array_detector
-from CONVERTER.soap import is_soap_envelope, soap_to_json
+from CONVERTER.soap import is_soap_envelope, is_service_payload, soap_to_json, build_soap_array_detector
 
 
 class MainWindow(QMainWindow):
@@ -486,14 +486,24 @@ class MainWindow(QMainWindow):
 
         if is_soap_envelope(self.current_xml_root):
             numeric_fields = getattr(self, "soap_numeric_fields", None)
-            return soap_to_json(self.current_xml_root, numeric_fields=numeric_fields)
+            detector = build_soap_array_detector(self.current_xml_root)
+            return soap_to_json(
+                self.current_xml_root,
+                numeric_fields=numeric_fields,
+                force_list=detector,
+            )
 
         detector = build_smart_array_detector(
             self.current_xml_root,
             use_prescan=True,
             use_heuristics=False,
         )
-        config = ConversionConfig(force_list=detector)
+        include_root = not is_service_payload(self.current_xml_root)
+        config = ConversionConfig(
+            strip_namespaces=True,
+            force_list=detector,
+            include_root=include_root,
+        )
         return xml_to_json(self.current_xml_root, config=config)
 
     def _on_convert_to_json(self):

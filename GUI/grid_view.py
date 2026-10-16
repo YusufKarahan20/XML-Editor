@@ -495,6 +495,8 @@ def _is_complex_node(node: _GridNode) -> bool:
     return False
 
 def _local_name(node: _GridNode) -> str:
+    if node.element in ("@xmlns", "Text"):
+        return node.element
     loc = node.element.split(":", 1)[-1]
     if node.lxml_element is not None and isinstance(node.lxml_element.tag, str):
         t = node.lxml_element.tag
@@ -586,11 +588,12 @@ def _expand_path_nodes(node: _GridNode, subpath: list[str]):
             if next_remaining:
                 _expand_path_nodes(child, next_remaining)
 
-def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value: str) -> bool:
+def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value: str, inside_table_row: bool = False) -> bool:
     """
     Recursively prunes children of _GridNode along the subpath.
     In repeating table rows (lists), preserves all sibling columns of matching rows.
     In single non-repeating XML paths, prunes non-path sibling branches to focus the view.
+    Inside a table row (record), preserves all sibling fields/properties of complex objects.
     Returns True if this node (or its valid descendants) matched and should be kept.
     """
     if not subpath:
@@ -615,17 +618,15 @@ def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value:
                 if matches:
                     any_kept = True
                     child.is_expanded = True
-                    # If this table row contains deeper subpaths, prune inner levels as well
-                    if len(remaining_subpath) > 1:
-                        _prune_grid_node(child, remaining_subpath, condition, value)
-                    elif remaining_subpath:
-                        # Direct leaf of this table row: preserve all columns of the row and expand to leaf
-                        _expand_path_nodes(child, remaining_subpath)
+                    # If this table row contains deeper subpaths, prune inner levels with inside_table_row=True
+                    if remaining_subpath:
+                        _prune_grid_node(child, remaining_subpath, condition, value, inside_table_row=True)
                 else:
                     children_to_remove.append(child)
             else:
-                if child.element not in ("@xmlns", "Text"):
-                    children_to_remove.append(child)
+                if not inside_table_row:
+                    if child.element not in ("@xmlns", "Text"):
+                        children_to_remove.append(child)
 
         for child in children_to_remove:
             node.children.remove(child)
@@ -634,7 +635,30 @@ def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value:
             node.is_expanded = True
         return any_kept
 
-    # Single XML path (non-repeating)
+    # Non-repeating level (is_table_rows is False)
+    if inside_table_row:
+        # Inside a table row (record): preserve all sibling fields/properties of this object.
+        # Only traverse down along the path to evaluate any deeper subpaths or leaf conditions.
+        any_kept = False
+        for child in node.children:
+            if _local_name(child) == level_name:
+                if len(subpath) > 1:
+                    keep = _prune_grid_node(child, subpath[1:], condition, value, inside_table_row=True)
+                    if keep:
+                        any_kept = True
+                        child.is_expanded = True
+                else:
+                    if has_condition:
+                        text = _get_node_text(child)
+                        if _check_condition(text, condition, value):
+                            any_kept = True
+                            child.is_expanded = True
+                    else:
+                        any_kept = True
+                        child.is_expanded = True
+        return any_kept
+
+    # Outside table rows: single non-repeating XML path container (e.g. root -> ProcessChangeOrder -> ChangeOrder)
     if len(subpath) == 1:
         any_kept = False
         children_to_remove = []
@@ -666,7 +690,7 @@ def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value:
 
     for child in node.children:
         if _local_name(child) == level_name:
-            keep = _prune_grid_node(child, subpath[1:], condition, value)
+            keep = _prune_grid_node(child, subpath[1:], condition, value, inside_table_row=False)
             if not keep:
                 children_to_remove.append(child)
             else:
