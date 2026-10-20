@@ -51,9 +51,9 @@ class XmlTreePanel(QWidget):
 
         layout.addWidget(self.tree_view)
 
-    def load_xml(self, filepath: str):
+    def load_xml(self, filepath: str, xml_root=None):
         """Load XML from filepath and update the tree model."""
-        new_model = self._build_xml_model(filepath)
+        new_model = self._build_xml_model(filepath, xml_root)
         self._xml_model = new_model
         self.tree_view.setModel(self._xml_model)
 
@@ -72,7 +72,7 @@ class XmlTreePanel(QWidget):
     # XML loading
     # ------------------------------------------------------------------
     @staticmethod
-    def _build_xml_model(filepath: str) -> QStandardItemModel:
+    def _build_xml_model(filepath: str, xml_root=None) -> QStandardItemModel:
         """Parse given XML file and build a QStandardItemModel."""
         model = QStandardItemModel()
         
@@ -85,23 +85,27 @@ class XmlTreePanel(QWidget):
             item.setEditable(False)
             return item
 
-        tree = etree.parse(filepath)
-        xml_root = tree.getroot()
+        if xml_root is None:
+            tree = etree.parse(filepath)
+            xml_root = tree.getroot()
 
         def _recursive_build(xml_el):
-            if isinstance(xml_el.tag, str):
-                qname = etree.QName(xml_el)
-                display_tag = f"{xml_el.prefix}:{qname.localname}" if xml_el.prefix else qname.localname
-            else:
-                display_tag = str(xml_el.tag)
+            if not isinstance(xml_el.tag, str):
+                return None
+            qname = etree.QName(xml_el)
+            display_tag = f"{xml_el.prefix}:{qname.localname}" if xml_el.prefix else qname.localname
                 
             node = _create_item(display_tag)
             for child in xml_el:
+                if not isinstance(child.tag, str):
+                    continue
                 child_node = _recursive_build(child)
-                node.appendRow(child_node)
+                if child_node is not None:
+                    node.appendRow(child_node)
             return node
 
         parsed_root = _recursive_build(xml_root)
-        model.appendRow(parsed_root)
+        if parsed_root is not None:
+            model.appendRow(parsed_root)
 
         return model

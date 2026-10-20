@@ -51,12 +51,13 @@ class CenterPanel(QWidget):
 
     def load_xml(self, filepath: str, xml_root=None):
         """Distribute the filepath to child panels."""
-        self.text_view.load_xml(filepath)
         if xml_root is not None:
             self.grid_view.load_xml(filepath, xml_root)
+            self.tree_view.load_xml(filepath, xml_root)
         else:
             self.grid_view.load_xml(filepath)
-        self.tree_view.load_xml(filepath)
+            self.tree_view.load_xml(filepath)
+        self.text_view.load_xml(filepath)
 
     def navigate_to_element(self, search_result):
         """Navigate to the element in Grid View."""

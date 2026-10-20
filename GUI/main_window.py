@@ -330,7 +330,7 @@ class MainWindow(QMainWindow):
         # 1. Validate XML first
         try:
             tree = etree.parse(filepath)
-            self.current_xml_root = tree.getroot()
+            new_root = tree.getroot()
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -341,22 +341,27 @@ class MainWindow(QMainWindow):
             
         # 2. XML is valid, update the views
         try:
-            self.center_panel.load_xml(filepath, self.current_xml_root)
-            self.filter_panel.load_xml_root(self.current_xml_root)
+            self.center_panel.load_xml(filepath, new_root)
+            self.filter_panel.load_xml_root(new_root)
             self.json_panel.clear()
             
+            # Reset previous search results and search panel
+            self.search_panel.clear()
+            self.search_results_panel.hide()
+            
+            self.current_xml_root = new_root
             self.current_xml_path = filepath
             filename = Path(filepath).name
             
             # Calculate total element nodes (ignoring text, comments, attributes)
             node_count = sum(1 for _ in self.current_xml_root.iter("*"))
             
-            self.update_status(state=f"Opened: {filename}", nodes=node_count)
+            self.update_status(state=f"Opened: {filename}", nodes=node_count, matches=0)
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "XML Load Error",
-                f"An error occurred while populating the views:\n\n{e}"
+                f"An error occurred while populating the views:\nThe current view will not be changed.\n\nError: {e}"
             )
 
     # ==================================================================

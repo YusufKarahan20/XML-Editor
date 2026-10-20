@@ -20,18 +20,81 @@ from PyQt6.QtCore import Qt
 
 class _GridNode:
     """Lightweight node holding element name, optional value, and children."""
-    __slots__ = ("element", "value", "children", "is_expanded", "lxml_element")
+    __slots__ = ("element", "value", "children", "is_expanded", "lxml_element", "node_type")
 
-    def __init__(self, element: str, value: str = "", children: list[_GridNode] | None = None):
+    def __init__(self, element: str, value: str = "", children: list[_GridNode] | None = None, node_type: str = "element"):
         self.element = element
         self.value = value
         self.children = children or []
         self.is_expanded = False
         self.lxml_element = None
+        self.node_type = node_type
 
     def append_child(self, child: _GridNode) -> _GridNode:
         self.children.append(child)
         return child
+
+
+class CommentWidget(QFrame):
+    """Renders an XML comment with Altova XMLSpy-style green styling."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("commentWidget")
+        self.setStyleSheet("""
+            QFrame#commentWidget {
+                background-color: #f6fcf6;
+                border: 1px solid #c8e6c9;
+                border-radius: 3px;
+            }
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
+
+        badge = QLabel("Comment")
+        badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px; background: transparent;")
+
+        comment_label = QLabel(text)
+        comment_label.setStyleSheet("color: #1b5e20; font-family: monospace; font-size: 11px; background: transparent;")
+        comment_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        comment_label.setWordWrap(True)
+
+        layout.addWidget(badge)
+        layout.addWidget(comment_label)
+        layout.addStretch()
+
+
+def _get_consecutive_chunks(children: list[_GridNode]) -> list[list[_GridNode]]:
+    """Groups consecutive child nodes with the same tag into chunks.
+    Comments and nodes with differing tags each form separate chunks.
+    @xmlns nodes are excluded as they are rendered separately.
+    """
+    chunks: list[list[_GridNode]] = []
+    current_chunk: list[_GridNode] = []
+
+    for c in children:
+        if c.element == "@xmlns":
+            continue
+        if getattr(c, "node_type", "element") == "comment":
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+            chunks.append([c])
+        else:
+            if not current_chunk:
+                current_chunk.append(c)
+            elif (getattr(current_chunk[0], "node_type", "element") == "element"
+                  and current_chunk[0].element == c.element):
+                current_chunk.append(c)
+            else:
+                chunks.append(current_chunk)
+                current_chunk = [c]
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
 
 
 # =====================================================================
@@ -203,6 +266,8 @@ class TableDisplayWidget(QWidget):
         columns = []
         for item in items:
             for child in item.children:
+                if getattr(child, "node_type", "element") == "comment":
+                    continue
                 if child.element == "@xmlns":
                     has_namespaces = True
                     # Başlık için ilk bulduğumuz namespace'in prefix'ini örnek alabiliriz
@@ -288,8 +353,12 @@ class TableDisplayWidget(QWidget):
                 current_col += 1
             
             # Eğer elemanın ne normal çocukları ne de text'i yoksa veya
-            # sadece @xmlns namespace'i varsa (text'i boş olan leaf):
-            if not item.children or (len(item.children) == 1 and item.children[0].element == "@xmlns"):
+            # sadece @xmlns namespace'i ya da yorumu varsa (text'i olan/olmayan leaf):
+            non_meta_children = [
+                ch for ch in item.children
+                if ch.element != "@xmlns" and getattr(ch, "node_type", "element") != "comment"
+            ]
+            if not non_meta_children:
                 val_lbl = QLabel(item.value)
                 val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
                 if is_target_val:
@@ -348,6 +417,9 @@ class TableDisplayWidget(QWidget):
 
 def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
     """Recursively render a node as a widget."""
+    if getattr(node, "node_type", "element") == "comment":
+        return CommentWidget(node.value)
+
     if not node.children:
         w = QWidget()
         l = QHBoxLayout(w)
@@ -370,11 +442,6 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
                 grid_panel._target_widget = w
 
         return w
-        
-    # Group children to detect repeats
-    groups = {}
-    for c in node.children:
-        groups.setdefault(c.element, []).append(c)
         
     frame = ExpandableFrame(node, on_rebuild)
 
@@ -399,14 +466,14 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
             grid_panel._target_widget = frame.header_widget
     
     if node.is_expanded:
-        if "@xmlns" in groups:
-            xmlns_nodes = groups.pop("@xmlns")[0].children
+        xmlns_node = next((c for c in node.children if c.element == "@xmlns"), None)
+        if xmlns_node and xmlns_node.children:
             ns_widget = QWidget()
             ns_layout = QGridLayout(ns_widget)
             ns_layout.setContentsMargins(0, 0, 0, 4)
             ns_layout.setSpacing(0)
             
-            for row, ns_child in enumerate(xmlns_nodes):
+            for row, ns_child in enumerate(xmlns_node.children):
                 lbl_pfx = QLabel(f"<b>{ns_child.element}</b>")
                 lbl_pfx.setStyleSheet("background: #f0f0f0; border: 1px solid #d0d0d0; padding: 4px; color: #555;")
                 lbl_uri = QLabel(ns_child.value)
@@ -418,11 +485,17 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
                 
             frame.add_widget(ns_widget)
 
-        for element_name, items in groups.items():
-            if len(items) == 1:
-                frame.add_widget(render_node(items[0], on_rebuild, grid_panel))
+        chunks = _get_consecutive_chunks(node.children)
+        for chunk in chunks:
+            if not chunk:
+                continue
+            if getattr(chunk[0], "node_type", "element") == "comment":
+                for c_node in chunk:
+                    frame.add_widget(CommentWidget(c_node.value))
+            elif len(chunk) == 1:
+                frame.add_widget(render_node(chunk[0], on_rebuild, grid_panel))
             else:
-                frame.add_widget(TableDisplayWidget(element_name, items, on_rebuild, grid_panel))
+                frame.add_widget(TableDisplayWidget(chunk[0].element, chunk, on_rebuild, grid_panel))
             
     return frame
 
@@ -441,6 +514,9 @@ def _parse_xml_to_grid(filepath: str, xml_root=None) -> _GridNode:
         xml_root = tree.getroot()
     
     def _recursive_parse(xml_el, parent_nsmap=None):
+        if not isinstance(xml_el.tag, str):
+            return None
+
         if parent_nsmap is None:
             parent_nsmap = {}
             
@@ -477,24 +553,63 @@ def _parse_xml_to_grid(filepath: str, xml_root=None) -> _GridNode:
                 node.value = ""
                 
         for child in xml_el:
+            if not isinstance(child.tag, str):
+                if child.tag == etree.Comment or callable(child.tag):
+                    comment_text = (child.text or "").strip()
+                    comment_node = _GridNode("Comment", value=comment_text, node_type="comment")
+                    comment_node.lxml_element = child
+                    node.append_child(comment_node)
+                continue
             child_node = _recursive_parse(child, xml_el.nsmap)
-            node.append_child(child_node)
+            if child_node is not None:
+                node.append_child(child_node)
         return node
         
+    if xml_root.getparent() is None:
+        prev_comments = []
+        try:
+            prev = xml_root.getprevious()
+            while prev is not None:
+                if prev.tag == etree.Comment or callable(prev.tag):
+                    c_node = _GridNode("Comment", value=(prev.text or "").strip(), node_type="comment")
+                    c_node.lxml_element = prev
+                    prev_comments.append(c_node)
+                prev = prev.getprevious()
+        except Exception:
+            pass
+        for c_node in reversed(prev_comments):
+            root.append_child(c_node)
+
     parsed_root = _recursive_parse(xml_root)
-    # parsed_root.is_expanded is False by default, keeping it collapsed
-    root.append_child(parsed_root)
+    if parsed_root is not None:
+        root.append_child(parsed_root)
+
+    if xml_root.getparent() is None:
+        try:
+            nxt = xml_root.getnext()
+            while nxt is not None:
+                if nxt.tag == etree.Comment or callable(nxt.tag):
+                    c_node = _GridNode("Comment", value=(nxt.text or "").strip(), node_type="comment")
+                    c_node.lxml_element = nxt
+                    root.append_child(c_node)
+                nxt = nxt.getnext()
+        except Exception:
+            pass
         
     return root
 
 def _is_complex_node(node: _GridNode) -> bool:
-    """Returns True if the node has structural children (not just xmlns or Text)."""
+    """Returns True if the node has structural children (not just xmlns, Text, or comments)."""
     for child in node.children:
+        if getattr(child, "node_type", "element") == "comment":
+            continue
         if child.element not in ("@xmlns", "Text"):
             return True
     return False
 
 def _local_name(node: _GridNode) -> str:
+    if getattr(node, "node_type", "element") == "comment":
+        return ""
     if node.element in ("@xmlns", "Text"):
         return node.element
     loc = node.element.split(":", 1)[-1]
@@ -509,13 +624,15 @@ def _get_node_text(node: _GridNode) -> str:
     Prioritizes node.value, falling back to node.lxml_element.text or child Text nodes
     when local xmlns declarations cause node.value to be empty in the grid model.
     """
-    if node is None:
+    if node is None or getattr(node, "node_type", "element") == "comment":
         return ""
     if node.value is not None and node.value.strip():
         return node.value.strip()
     if node.lxml_element is not None and node.lxml_element.text and node.lxml_element.text.strip():
         return node.lxml_element.text.strip()
     for child in node.children:
+        if getattr(child, "node_type", "element") == "comment":
+            continue
         if child.element == "Text" and child.value is not None and child.value.strip():
             return child.value.strip()
     if node.value is not None:
@@ -774,6 +891,7 @@ class XmlGridPanel(QWidget):
         self._demo_root = _parse_xml_to_grid(filepath, self._current_root)
         self._target_search_result = None
         self._target_widget = None
+        self.filter_status_widget.hide()
         self._rebuild()
 
     def navigate_to_element(self, search_result):
@@ -802,10 +920,12 @@ class XmlGridPanel(QWidget):
             parent_node.is_expanded = True
             
             # If current_node is part of a repeated group (TableDisplayWidget), 
-            # its visibility is controlled by the first item in that group.
-            first_sibling = next((c for c in parent_node.children if c.element == current_node.element), None)
-            if first_sibling:
-                first_sibling.is_expanded = True
+            # its visibility is controlled by the first item in its consecutive chunk.
+            chunks = _get_consecutive_chunks(parent_node.children)
+            for chunk in chunks:
+                if current_node in chunk:
+                    chunk[0].is_expanded = True
+                    break
             
         self._target_search_result = search_result
         self._target_widget = None
@@ -857,7 +977,8 @@ class XmlGridPanel(QWidget):
 
         # Attach matching elements as children using the parser's logic
         for elem in matched_elements:
-            child_node = _parse_xml_to_grid("", elem).children[0]
+            grid_res = _parse_xml_to_grid("", elem)
+            child_node = next((c for c in grid_res.children if getattr(c, "node_type", "element") != "comment"), grid_res.children[0])
             child_node.is_expanded = True
             
             # If elem is already a table row (its parent in XML has multiple siblings with the same tag),
@@ -911,13 +1032,19 @@ class XmlGridPanel(QWidget):
         if not self._demo_root or not self._demo_root.children:
             return
             
-        root_node = self._demo_root.children[0]
+        root_node = next((c for c in self._demo_root.children if getattr(c, "node_type", "element") != "comment"), None)
+        if root_node is None:
+            return
         root_node.is_expanded = True
         
         for child in root_node.children:
+            if getattr(child, "node_type", "element") == "comment":
+                continue
             if _local_name(child).strip() == target_name.strip():
                 child.is_expanded = True
                 for subchild in child.children:
+                    if getattr(subchild, "node_type", "element") == "comment":
+                        continue
                     if subchild.element not in ("@xmlns", "Text"):
                         subchild.is_expanded = False
             else:
