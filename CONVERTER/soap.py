@@ -49,16 +49,107 @@ def is_soap_envelope(element: Any) -> bool:
         return False
 
 
+# Standard service operation message contract suffixes (case-insensitive)
+_SERVICE_MESSAGE_SUFFIXES = (
+    "response",
+    "request",
+    "dsl",
+    "ebm",
+    "ebo",
+    "fault",
+)
+
+# Recognized action verbs indicating an RPC / service operation method (case-insensitive)
+_SERVICE_OPERATION_VERBS = (
+    "get",
+    "set",
+    "create",
+    "update",
+    "delete",
+    "query",
+    "check",
+    "find",
+    "fetch",
+    "search",
+    "sync",
+    "cancel",
+    "execute",
+    "process",
+    "validate",
+    "calculate",
+    "inquire",
+)
+
+# Strong structural service envelope blocks (composite service headers / request-response envelopes)
+_STRONG_SERVICE_CHILD_BLOCKS = {
+    "requestinfo",
+    "responseinfo",
+    "preqinfo",
+    "preqres",
+    "ticketdetails",
+}
+
+# Specific namespace URI / prefix fragments indicating enterprise web service contracts
+_SERVICE_NS_FRAGMENTS = (
+    "/ebm",
+    "/ebo",
+    "/extsystem",
+    "/services",
+    "/ws",
+    "/wsdl",
+)
+_SERVICE_NS_PREFIXES = {"ebm", "ebo", "tt", "ws", "srv"}
+
+
+def _starts_with_service_verb(name: str) -> bool:
+    """
+    Checks if a name starts with an operation verb followed by camelCase/PascalCase
+    (e.g., 'getHat...', 'createOrder...', 'checkLine...') or an underscore ('get_hat...').
+    Prevents false positives on plain words like 'getter', 'gadget', 'creation'.
+    """
+    name_lower = name.lower()
+    for verb in _SERVICE_OPERATION_VERBS:
+        if name_lower.startswith(verb) and len(name) > len(verb):
+            next_char = name[len(verb)]
+            if next_char.isupper() or next_char == "_":
+                return True
+    return False
+
+
+def _has_service_namespace(namespace: str, prefix: str) -> bool:
+    """
+    Checks if the element's namespace URI or prefix specifically indicates
+    an enterprise web service contract (e.g. Etiya EBM/EBO, WSDL, WS).
+    Avoids matching generic paths like '/schemas' or '/schema'.
+    """
+    ns_lower = namespace.lower() if namespace else ""
+    pref_lower = prefix.lower() if prefix else ""
+    return (
+        any(frag in ns_lower for frag in _SERVICE_NS_FRAGMENTS)
+        or pref_lower in _SERVICE_NS_PREFIXES
+    )
+
+
 def is_service_payload(element: Any) -> bool:
     """
-    Checks if an XML element represents a non-SOAP service request or response
-    payload (e.g. tt:getTroubleTicketStatusResponse, cust:createCorporateCustomerRequest).
+    Checks if an XML element represents a service request or response operation
+    payload (e.g. tt:getTroubleTicketStatusResponse, ebm:getHatDondurmaYapilabilirlikDSL,
+    ser:createOrderRequest).
 
-    Criteria:
+    Strict Criteria:
       1. Must be a valid element with child elements (not a leaf or empty tag).
       2. Must have a namespace or namespace prefix (contract-driven schema).
-      3. Local tag name ends with a standard service operation suffix
-         ('Response' or 'Request', case-insensitive).
+      3. Must satisfy contract-aware service payload criteria without false positives:
+         a) Starts with a service operation verb (e.g. 'get...', 'create...', 'check...')
+            AND ends with a service suffix ('Response', 'Request', 'DSL', 'EBM', 'EBO', 'Fault')
+            OR contains strong service children ('RequestInfo', etc.)
+            OR has a dedicated service contract namespace.
+         b) Ends with an explicit enterprise message suffix ('EBM', 'EBO', 'Fault')
+            with length > 3 AND has service contract namespace or strong service children.
+         c) Contains strong composite service envelope blocks (e.g. 'RequestInfo', 'ResponseInfo')
+            paired with input/output/details AND has a service contract namespace.
+
+      If evidence is insufficient, defaults to False to preserve the root element.
     """
     if element is None or not hasattr(element, "tag"):
         return False
@@ -72,9 +163,45 @@ def is_service_payload(element: Any) -> bool:
     try:
         qname = etree.QName(element)
         localname = qname.localname
-        has_namespace = bool(qname.namespace or element.prefix)
-        is_service_op = localname.lower().endswith(("response", "request"))
-        return has_namespace and is_service_op
+        namespace = qname.namespace or ""
+        prefix = element.prefix or ""
+        has_namespace = bool(namespace or prefix)
+        if not has_namespace:
+            return False
+
+        lname_lower = localname.lower()
+        is_verb_op = _starts_with_service_verb(localname)
+        has_service_ns = _has_service_namespace(namespace, prefix)
+
+        # Inspect child elements
+        child_localnames = {etree.QName(c).localname.lower() for c in children}
+        has_strong_child_block = bool(child_localnames & _STRONG_SERVICE_CHILD_BLOCKS)
+        has_paired_io = (
+            ("input" in child_localnames or "output" in child_localnames)
+            and ("requestinfo" in child_localnames or "header" in child_localnames or has_strong_child_block)
+        ) or ("result" in child_localnames and len(children) > 1 and (has_strong_child_block or has_service_ns))
+
+        # Rule 1: Operation verb (e.g. getTroubleTicketStatusResponse, getHatDondurmaYapilabilirlikDSL, createOrderRequest, queryResponse)
+        if is_verb_op:
+            # 1a. Ends with a recognized service message suffix (Response, Request, DSL, EBM, EBO, Fault)
+            if lname_lower.endswith(_SERVICE_MESSAGE_SUFFIXES) and len(localname) > 3:
+                return True
+            # 1b. Has strong service children (RequestInfo, Result, etc.) or service namespace contract
+            if has_strong_child_block or has_paired_io or has_service_ns:
+                return True
+
+        # Rule 2: Non-verb root ending with explicit Enterprise Business Message / Fault suffixes
+        # (e.g. TroubleTicketEBM, ServiceFault) accompanied by service namespace or strong child blocks
+        if lname_lower.endswith(("ebm", "ebo", "fault")) and len(localname) > 3:
+            if has_service_ns or has_strong_child_block or has_paired_io:
+                return True
+
+        # Rule 3: Root containing unambiguous composite service envelope blocks
+        # (e.g. RequestInfo + input, or pReqInfo + input) accompanied by service namespace
+        if (has_strong_child_block or has_paired_io) and has_service_ns:
+            return True
+
+        return False
     except (ValueError, TypeError):
         return False
 

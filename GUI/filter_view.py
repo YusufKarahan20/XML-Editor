@@ -71,7 +71,7 @@ class FilterPanel(QWidget):
         scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         content_widget = QWidget()
-        content_widget.setStyleSheet("background: transparent;")
+        content_widget.setStyleSheet(".QWidget { background: transparent; }")
         self.content_layout = QVBoxLayout(content_widget)
         self.content_layout.setContentsMargins(10, 10, 10, 10)
         self.content_layout.setSpacing(12)

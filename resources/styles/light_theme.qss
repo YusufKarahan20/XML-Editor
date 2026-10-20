@@ -245,6 +245,60 @@ QLineEdit::placeholder {
     color: #909090;
 }
 
+/* ---------- Combo Box (Filter Explorer & General) ---------- */
+QComboBox {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #b8b8b8;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 13px;
+}
+
+QComboBox:hover {
+    border-color: #999999;
+}
+
+QComboBox:focus {
+    border-color: #b8960c;
+}
+
+QComboBox:disabled {
+    background-color: #ececec;
+    color: #a0a0a0;
+    border-color: #d0d0d0;
+}
+
+/* ---------- Combo Box Dropdown Popup (Dark Mode Protection) ---------- */
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    selection-background-color: #dce7f5;
+    selection-color: #1e1e1e;
+    outline: 0;
+    padding: 1px;
+}
+
+QComboBox QAbstractItemView::item {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    min-height: 24px;
+    padding: 3px 6px;
+    border-radius: 2px;
+}
+
+QComboBox QAbstractItemView::item:hover {
+    background-color: #f0f4fa;
+    color: #1e1e1e;
+}
+
+QComboBox QAbstractItemView::item:selected {
+    background-color: #dce7f5;
+    color: #1e1e1e;
+}
+
 /* ---------- Push Buttons ---------- */
 QPushButton {
     background-color: #e2e2e2;

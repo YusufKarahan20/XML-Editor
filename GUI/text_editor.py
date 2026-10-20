@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import (
     QPainter, QColor, QTextFormat, QFont, QSyntaxHighlighter, QTextCharFormat
 )
-from PyQt6.QtCore import Qt, QRect, QSize
+from PyQt6.QtCore import Qt, QRect, QSize, QTimer, pyqtSignal
 
 class FoldNode:
     """Represents a foldable block in the raw XML text."""
@@ -168,10 +168,12 @@ class LineNumberArea(QWidget):
         self.editor.line_number_area_mouse_press_event(event)
 
 class XmlTextEditor(QPlainTextEdit):
-    """ReadOnly QPlainTextEdit with folding and line numbers."""
+    """Editable QPlainTextEdit with folding, line numbers, and debounced change detection."""
+    xml_content_changed = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setReadOnly(True)
+        self.setReadOnly(False)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         
         mono = QFont("Cascadia Code", 11)
@@ -189,20 +191,43 @@ class XmlTextEditor(QPlainTextEdit):
         
         self.fold_nodes = []
         self.line_to_node = {}
-        
+
+        # Debounce timer for user typing / pasting
+        self._is_programmatic_change = False
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(800)
+        self._debounce_timer.timeout.connect(self._on_debounce_timeout)
+        self.textChanged.connect(self._on_text_changed)
+
+    def _on_text_changed(self):
+        if self._is_programmatic_change:
+            return
+        self._debounce_timer.start(800)
+
+    def _on_debounce_timeout(self):
+        if self._is_programmatic_change:
+            return
+        self.xml_content_changed.emit(self.toPlainText())
+
     def setPlainText(self, text):
-        super().setPlainText(text)
-        self.fold_nodes = XmlStructureAnalyzer.analyze(text)
-        self.line_to_node = {}
-        
-        def populate_map(nodes):
-            for n in nodes:
-                if n.end_line > n.start_line:
-                    self.line_to_node[n.start_line] = n
-                populate_map(n.children)
-                
-        populate_map(self.fold_nodes)
-        self.apply_folding() # ensure clean state
+        self._is_programmatic_change = True
+        try:
+            self._debounce_timer.stop()
+            super().setPlainText(text)
+            self.fold_nodes = XmlStructureAnalyzer.analyze(text)
+            self.line_to_node = {}
+            
+            def populate_map(nodes):
+                for n in nodes:
+                    if n.end_line > n.start_line:
+                        self.line_to_node[n.start_line] = n
+                    populate_map(n.children)
+                    
+            populate_map(self.fold_nodes)
+            self.apply_folding() # ensure clean state
+        finally:
+            self._is_programmatic_change = False
         
     def line_number_area_width(self):
         digits = 1

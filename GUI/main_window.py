@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self._create_status_bar()
         self.current_xml_path = None
         self.current_xml_root = None
+        self._last_valid_xml_text = ""
         self.soap_numeric_fields = None
         self.update_status(state="No XML file opened")
 
@@ -106,6 +107,8 @@ class MainWindow(QMainWindow):
         _action("edit_redo",       "Redo",       "Ctrl+Y",  "Redo last action")
         _action("edit_copy",       "Copy",       "Ctrl+C",  "Copy selection",
                 slot=self._on_copy)
+        _action("edit_paste",      "Paste",      "Ctrl+V",  "Paste from clipboard",
+                slot=self._on_paste)
         _action("edit_select_all", "Select All", "Ctrl+A",  "Select all",
                 slot=self._on_select_all)
 
@@ -155,6 +158,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self._actions["edit_redo"])
         edit_menu.addSeparator()
         edit_menu.addAction(self._actions["edit_copy"])
+        edit_menu.addAction(self._actions["edit_paste"])
         edit_menu.addAction(self._actions["edit_select_all"])
 
         # ── View ─────────────────────────────────────────────────────
@@ -222,6 +226,7 @@ class MainWindow(QMainWindow):
 
         # Create panels
         self.center_panel = CenterPanel()
+        self.center_panel.xml_content_changed.connect(self._on_text_view_content_changed)
         self.json_panel = JsonPreviewPanel()
 
         # Horizontal splitter: Center | JSON
@@ -320,7 +325,10 @@ class MainWindow(QMainWindow):
     # ==================================================================
     def _open_file_dialog(self):
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open XML File", "", "XML Files (*.xml);;All Files (*)"
+            self,
+            "Open XML File",
+            "",
+            "XML & Text Files (*.xml *.txt);;XML Files (*.xml);;Text Files (*.txt);;All Files (*)"
         )
         if filepath:
             self.load_xml_file(filepath)
@@ -331,6 +339,8 @@ class MainWindow(QMainWindow):
         try:
             tree = etree.parse(filepath)
             new_root = tree.getroot()
+            with open(filepath, "r", encoding="utf-8-sig") as f:
+                file_text = f.read()
         except Exception as e:
             QMessageBox.warning(
                 self,
@@ -341,6 +351,7 @@ class MainWindow(QMainWindow):
             
         # 2. XML is valid, update the views
         try:
+            self._last_valid_xml_text = file_text
             self.center_panel.load_xml(filepath, new_root)
             self.filter_panel.load_xml_root(new_root)
             self.json_panel.clear()
@@ -363,6 +374,51 @@ class MainWindow(QMainWindow):
                 "XML Load Error",
                 f"An error occurred while populating the views:\nThe current view will not be changed.\n\nError: {e}"
             )
+
+    def _on_text_view_content_changed(self, new_text: str):
+        """Validates and loads XML edited or pasted directly in Text View."""
+        if new_text == self._last_valid_xml_text:
+            return
+
+        if not new_text.strip():
+            if self.current_xml_root is None:
+                return
+
+        import io
+        try:
+            tree = etree.parse(io.BytesIO(new_text.encode("utf-8")))
+            new_root = tree.getroot()
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "XML Load Error",
+                f"Could not parse the XML content from Text View.\nThe current view will not be changed.\n\nError: {e}"
+            )
+            self.center_panel.revert_text(self._last_valid_xml_text)
+            return
+
+        try:
+            self._last_valid_xml_text = new_text
+            self.center_panel.load_xml_from_text(new_text, new_root, source_name="<Pasted XML>")
+            self.filter_panel.load_xml_root(new_root)
+            self.json_panel.clear()
+
+            # Reset previous search results and search panel
+            self.search_panel.clear()
+            self.search_results_panel.hide()
+
+            self.current_xml_root = new_root
+            self.current_xml_path = None
+
+            node_count = sum(1 for _ in self.current_xml_root.iter("*"))
+            self.update_status(state="Loaded from Text View", nodes=node_count, matches=0)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "XML Load Error",
+                f"An error occurred while populating the views:\nThe current view will not be changed.\n\nError: {e}"
+            )
+            self.center_panel.revert_text(self._last_valid_xml_text)
 
     # ==================================================================
     #  SEARCH HANDLING
@@ -618,6 +674,14 @@ class MainWindow(QMainWindow):
             focused.copy()
         elif hasattr(self, "json_panel") and self.json_panel.text_edit.textCursor().hasSelection():
             self.json_panel.text_edit.copy()
+
+    def _on_paste(self):
+        """Pastes clipboard text into the focused widget or Text View."""
+        focused = QApplication.focusWidget()
+        if focused and hasattr(focused, "paste"):
+            focused.paste()
+        elif hasattr(self, "center_panel") and hasattr(self.center_panel, "text_view"):
+            self.center_panel.text_view.text_edit.paste()
 
     def _on_select_all(self):
         """Selects all text in the focused widget or JSON preview."""
