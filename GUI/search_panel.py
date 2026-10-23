@@ -6,9 +6,9 @@ navigation, and a result count label.
 """
 
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel
+    QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox
 )
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, QTimer
 
 
 class SearchPanel(QWidget):
@@ -21,6 +21,11 @@ class SearchPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._last_emitted_query = ""
+        self._debounce_timer = QTimer(self)
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(200)
+        self._debounce_timer.timeout.connect(self._on_debounce_timeout)
         self._setup_ui()
 
     # ------------------------------------------------------------------
@@ -46,6 +51,14 @@ class SearchPanel(QWidget):
         self.search_input.textChanged.connect(self._on_text_changed)
         self.search_input.installEventFilter(self)
         layout.addWidget(self.search_input)
+
+        # Filter mode combo (All, Element, Value)
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(["All", "Element", "Value"])
+        self.filter_combo.setFixedWidth(78)
+        self.filter_combo.setToolTip("Filter by All, Element tags, or text Values")
+        self.filter_combo.currentIndexChanged.connect(self._on_filter_mode_changed)
+        layout.addWidget(self.filter_combo)
 
         # Search button
         self.btn_search = QPushButton("Search")
@@ -82,6 +95,13 @@ class SearchPanel(QWidget):
         """Update the displayed result count."""
         self.result_label.setText(f"{count} match{'es' if count != 1 else ''}")
 
+    def set_active_match(self, current: int, total: int):
+        """Update result label to show current active match (e.g. '1/113 matches')."""
+        if total > 0 and 1 <= current <= total:
+            self.result_label.setText(f"{current}/{total} match{'es' if total != 1 else ''}")
+        else:
+            self.set_result_count(total)
+
     def show_error(self, message: str):
         """Show an error or status message."""
         self.result_label.setText(message)
@@ -97,22 +117,58 @@ class SearchPanel(QWidget):
         """Return the current search query text."""
         return self.search_input.text().strip()
 
+    def get_filter_mode(self) -> str:
+        """Return the current search filter mode ('All', 'Element', 'Value')."""
+        return self.filter_combo.currentText()
+
+    def set_filter_mode(self, mode: str):
+        """Set the current search filter mode."""
+        index = self.filter_combo.findText(mode)
+        if index >= 0:
+            self.filter_combo.setCurrentIndex(index)
+
     def clear(self):
         """Reset the search bar."""
+        self._debounce_timer.stop()
+        self._last_emitted_query = ""
         self.search_input.clear()
+        self.filter_combo.blockSignals(True)
+        self.filter_combo.setCurrentIndex(0)
+        self.filter_combo.blockSignals(False)
         self.result_label.setText("0 matches")
 
     # ------------------------------------------------------------------
     # Internal slots
     # ------------------------------------------------------------------
     def _on_search(self):
+        self._debounce_timer.stop()
+        query = self.get_query()
+        if query and query != self._last_emitted_query:
+            self._last_emitted_query = query
+            self.search_requested.emit(query)
+
+    def _on_filter_mode_changed(self, index: int):
+        self._debounce_timer.stop()
         query = self.get_query()
         if query:
+            self._last_emitted_query = query
             self.search_requested.emit(query)
 
     def _on_text_changed(self, text: str):
-        if not text.strip():
+        stripped = text.strip()
+        if not stripped:
+            self._debounce_timer.stop()
+            self._last_emitted_query = ""
             self.search_requested.emit("")
+        else:
+            if stripped != self._last_emitted_query:
+                self._debounce_timer.start(200)
+
+    def _on_debounce_timeout(self):
+        query = self.get_query()
+        if query and query != self._last_emitted_query:
+            self._last_emitted_query = query
+            self.search_requested.emit(query)
 
     def eventFilter(self, obj, event):
         return super().eventFilter(obj, event)

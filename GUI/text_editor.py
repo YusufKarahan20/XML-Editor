@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QWidget, QPlainTextEdit, QTextEdit, QHBoxLayout
 )
 from PyQt6.QtGui import (
-    QPainter, QColor, QTextFormat, QFont, QSyntaxHighlighter, QTextCharFormat
+    QPainter, QColor, QTextFormat, QFont, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 )
 from PyQt6.QtCore import Qt, QRect, QSize, QTimer, pyqtSignal
 
@@ -203,6 +203,7 @@ class XmlTextEditor(QPlainTextEdit):
     def _on_text_changed(self):
         if self._is_programmatic_change:
             return
+        self.clear_search_highlight()
         self._debounce_timer.start(800)
 
     def _on_debounce_timeout(self):
@@ -366,3 +367,130 @@ class XmlTextEditor(QPlainTextEdit):
         self.viewport().update()
         self.line_number_area.update()
         self.document().markContentsDirty(0, self.document().characterCount())
+
+    def unfold_for_line(self, target_line: int):
+        """Unfold only the ancestor fold nodes enclosing target_line, preserving unrelated folds."""
+        changed = False
+        def check_node(node):
+            nonlocal changed
+            if node.start_line <= target_line <= node.end_line:
+                if node.is_folded and node.start_line < target_line:
+                    node.is_folded = False
+                    changed = True
+                for child in node.children:
+                    check_node(child)
+
+        for root in self.fold_nodes:
+            check_node(root)
+
+        if changed:
+            self.apply_folding()
+
+    def navigate_to_element(self, search_result):
+        """Navigate to element or value in Text View, unfold ancestors if folded, and highlight."""
+        if not search_result:
+            return
+
+        line_num = getattr(search_result, "line_number", None)
+        if line_num is None or line_num <= 0:
+            return
+
+        block_num = line_num - 1
+        if not (0 <= block_num < self.document().blockCount()):
+            return
+
+        # 1. Unfold only necessary ancestors
+        self.unfold_for_line(block_num)
+
+        block = self.document().findBlockByNumber(block_num)
+        if not block.isValid():
+            return
+
+        block_text = block.text()
+        match_type = getattr(search_result, "match_type", "Element")
+        matched_text = getattr(search_result, "matched_text", "")
+        tag_full = getattr(search_result, "tag", "")
+        tag_local = tag_full.split(":", 1)[-1] if ":" in tag_full else tag_full
+
+        start_char = -1
+        match_len = 0
+
+        if match_type == "Value" and matched_text:
+            # Value is strictly between <tag...> and </tag>
+            # Locate the opening tag on this line: <tag_full or <tag_local
+            pattern_tag = re.compile(rf'<({re.escape(tag_full)}|{re.escape(tag_local)})[\s>]', re.IGNORECASE)
+            m_tag = pattern_tag.search(block_text)
+            if m_tag:
+                tag_close_idx = block_text.find('>', m_tag.end() - 1)
+                if tag_close_idx != -1:
+                    val_idx = block_text.lower().find(matched_text.lower(), tag_close_idx + 1)
+                    if val_idx != -1:
+                        close_tag_idx = block_text.find('</', tag_close_idx + 1)
+                        if close_tag_idx == -1 or val_idx < close_tag_idx:
+                            start_char = val_idx
+                            match_len = len(matched_text)
+            if start_char == -1:
+                # If tag boundary search didn't isolate it, check if matched_text uniquely appears
+                # outside attributes
+                occurrences = [m.start() for m in re.finditer(re.escape(matched_text.lower()), block_text.lower())]
+                if len(occurrences) == 1:
+                    start_char = occurrences[0]
+                    match_len = len(matched_text)
+                # If ambiguous or not found, start_char remains -1 (safety guard: only line is highlighted)
+
+        elif match_type == "Element":
+            # For Element, highlight the tag name inside opening tag
+            pattern_tag = re.compile(rf'<({re.escape(tag_full)}|{re.escape(tag_local)})(\s|>|/)', re.IGNORECASE)
+            m_tag = pattern_tag.search(block_text)
+            if m_tag:
+                start_char = m_tag.start(1)
+                match_len = len(m_tag.group(1))
+            else:
+                idx = block_text.lower().find(tag_full.lower())
+                if idx != -1:
+                    start_char = idx
+                    match_len = len(tag_full)
+                else:
+                    idx = block_text.lower().find(tag_local.lower())
+                    if idx != -1:
+                        start_char = idx
+                        match_len = len(tag_local)
+
+        # 2. Build ExtraSelection
+        selections = []
+
+        # Full-width line highlight (soft warm yellow background)
+        line_sel = QTextEdit.ExtraSelection()
+        line_cursor = QTextCursor(block)
+        line_cursor.clearSelection()
+        line_sel.cursor = line_cursor
+        line_sel.format.setBackground(QColor("#fffde7"))
+        line_sel.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+        selections.append(line_sel)
+
+        # Precise text highlight if safely found
+        if start_char != -1 and match_len > 0:
+            text_sel = QTextEdit.ExtraSelection()
+            text_cursor = QTextCursor(block)
+            text_cursor.setPosition(block.position() + start_char)
+            text_cursor.setPosition(block.position() + start_char + match_len, QTextCursor.MoveMode.KeepAnchor)
+            text_sel.cursor = text_cursor
+            text_sel.format.setBackground(QColor("#ffe082"))
+            text_sel.format.setForeground(QColor("#000000"))
+            selections.append(text_sel)
+            self.setTextCursor(text_cursor)
+        else:
+            self.setTextCursor(line_cursor)
+
+        self.setExtraSelections(selections)
+        self.centerCursor()
+
+    def clear_search_highlight(self) -> bool:
+        """Clears search highlights, moves cursor to top and scrolls to the beginning."""
+        had_highlight = len(self.extraSelections()) > 0
+        self.setExtraSelections([])
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self.setTextCursor(cursor)
+        self.verticalScrollBar().setValue(0)
+        return had_highlight

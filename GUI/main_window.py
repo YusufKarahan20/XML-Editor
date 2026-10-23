@@ -246,6 +246,7 @@ class MainWindow(QMainWindow):
         self.search_panel.previous_requested.connect(self.search_results_panel.select_previous)
         self.search_panel.next_requested.connect(self.search_results_panel.select_next)
         self.search_results_panel.result_selected.connect(self.center_panel.navigate_to_element)
+        self.search_results_panel.match_index_changed.connect(self.search_panel.set_active_match)
 
         # Filter Panel (Filter Explorer on the left)
         self.filter_panel = FilterPanel()
@@ -261,6 +262,7 @@ class MainWindow(QMainWindow):
         self.work_v_splitter.addWidget(self.search_results_panel)
         self.work_v_splitter.setStretchFactor(0, 85)
         self.work_v_splitter.setStretchFactor(1, 15)
+        self.work_v_splitter.setChildrenCollapsible(False)
 
         # Horizontal outer splitter: Filter Explorer on Left | Work Area on Right
         self.h_main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -358,7 +360,9 @@ class MainWindow(QMainWindow):
             
             # Reset previous search results and search panel
             self.search_panel.clear()
+            self.search_results_panel.clear()
             self.search_results_panel.hide()
+            self.center_panel.clear_search_highlight()
             
             self.current_xml_root = new_root
             self.current_xml_path = filepath
@@ -405,7 +409,9 @@ class MainWindow(QMainWindow):
 
             # Reset previous search results and search panel
             self.search_panel.clear()
+            self.search_results_panel.clear()
             self.search_results_panel.hide()
+            self.center_panel.clear_search_highlight()
 
             self.current_xml_root = new_root
             self.current_xml_path = None
@@ -425,25 +431,39 @@ class MainWindow(QMainWindow):
     # ==================================================================
     def _perform_search(self, query: str):
         if not query.strip():
-            self.search_panel.show_error("Lütfen arama metni girin.")
+            self.search_panel.set_result_count(0)
+            self.search_results_panel.clear()
             self.search_results_panel.hide()
             self.update_status(matches=0)
+            self.center_panel.clear_search_highlight()
             return
 
         if self.current_xml_root is None:
             self.search_panel.show_error("Arama yapılacak XML dosyası bulunamadı.")
+            self.search_results_panel.clear()
             self.search_results_panel.hide()
+            self.center_panel.clear_search_highlight()
             return
-            
-        results = search_xml(self.current_xml_root, query)
+
+        # Starting a new search clears any previous search's highlight
+        self.center_panel.clear_search_highlight()
+
+        filter_mode = self.search_panel.get_filter_mode()
+        results = search_xml(self.current_xml_root, query, filter_mode=filter_mode)
         self.search_panel.show_results(len(results))
         self.update_status(matches=len(results))
         
         if not results:
+            self.search_results_panel.clear()
             self.search_results_panel.hide()
         else:
             self.search_results_panel.update_results(results)
             self.search_results_panel.show()
+            sizes = self.work_v_splitter.sizes()
+            if len(sizes) == 2 and sizes[1] < 80:
+                total_h = sum(sizes) if sum(sizes) > 0 else 700
+                desired_panel_h = min(250, max(80, total_h // 4))
+                self.work_v_splitter.setSizes([total_h - desired_panel_h, desired_panel_h])
 
     # ==================================================================
     #  FILTER HANDLING

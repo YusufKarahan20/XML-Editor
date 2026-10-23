@@ -33,12 +33,15 @@ def build_human_readable_location(element):
     path_parts.reverse()
     return " > ".join(path_parts)
 
-def search_xml(root_element, query: str) -> list[SearchResult]:
+def search_xml(root_element, query: str, filter_mode: str = "All") -> list[SearchResult]:
     results = []
     if not query or root_element is None:
         return results
         
     query_lower = query.lower()
+    mode = (filter_mode or "All").strip().lower()
+    include_element = mode in ("all", "element")
+    include_value = mode in ("all", "value")
     
     # We will do a full recursive traversal
     # to maintain document order easily
@@ -47,19 +50,26 @@ def search_xml(root_element, query: str) -> list[SearchResult]:
         
         # 1. Check Element tag match
         tag_str = get_display_tag(el)
-        if query_lower in tag_str.lower():
-            location = build_human_readable_location(el)
-            results.append(SearchResult(
-                matched_text=tag_str,
-                tag=tag_str,
-                match_type="Element",
-                line_number=line_no,
-                location=location,
-                element=el
-            ))
+        if include_element:
+            if ":" in query:
+                tag_matches = query_lower in tag_str.lower()
+            else:
+                local_tag = tag_str.split(":", 1)[-1]
+                tag_matches = query_lower in local_tag.lower()
+
+            if tag_matches:
+                location = build_human_readable_location(el)
+                results.append(SearchResult(
+                    matched_text=tag_str,
+                    tag=tag_str,
+                    match_type="Element",
+                    line_number=line_no,
+                    location=location,
+                    element=el
+                ))
             
         # 2. Check Element value match
-        if el.text and el.text.strip():
+        if include_value and el.text and el.text.strip():
             text_str = el.text.strip()
             if query_lower in text_str.lower():
                 location = build_human_readable_location(el)

@@ -104,6 +104,7 @@ class HeaderWidget(QWidget):
     """Clickable header for the ExpandableFrame."""
     def __init__(self, node: _GridNode, toggle_callback, parent=None):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.toggle_callback = toggle_callback
         
         layout = QHBoxLayout(self)
@@ -302,10 +303,44 @@ class TableDisplayWidget(QWidget):
             grid_layout.addWidget(ns_hdr, 0, col_offset)
             col_offset += 1
         
+        target_col_index = -1
+        target_row_index = -1
+        is_target_elem_in_table = False
+
+        def _node_contains_element(node: _GridNode, el) -> bool:
+            if node.lxml_element is el:
+                return True
+            for ch in node.children:
+                if _node_contains_element(ch, el):
+                    return True
+            return False
+
+        if self.grid_panel and self.grid_panel._target_search_result:
+            target_el = self.grid_panel._target_search_result.element
+            match_type = self.grid_panel._target_search_result.match_type
+            if match_type == "Element":
+                for r, item in enumerate(items):
+                    for c, col_name in enumerate(columns):
+                        for child in item.children:
+                            if child.element == col_name and _node_contains_element(child, target_el):
+                                target_col_index = c
+                                target_row_index = r
+                                is_target_elem_in_table = True
+                                break
+                        if is_target_elem_in_table:
+                            break
+                    if is_target_elem_in_table:
+                        break
+
         # Normal çocuk kolonların başlıkları
         for c, col_name in enumerate(columns):
             hdr = QLabel(f"<b>{col_name}</b>")
-            hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
+            if is_target_elem_in_table and c == target_col_index:
+                hdr.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 4px; border: 2px solid #e6b800; border-radius: 2px; font-weight: bold;")
+                if self.grid_panel._target_widget is None:
+                    self.grid_panel._target_widget = hdr
+            else:
+                hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
             grid_layout.addWidget(hdr, 0, col_offset + c)
             
         # Satırları oluşturma
@@ -318,12 +353,15 @@ class TableDisplayWidget(QWidget):
                 else:
                     is_target_val = True
 
+            is_child_target_row = (is_target_elem_in_table and r == target_row_index)
+
             # Row number
             row_lbl = QLabel(str(r + 1))
             row_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignTop)
-            if is_target_row:
-                row_lbl.setStyleSheet("background: #fffacd; padding: 6px; font-size: 11px; color: #888; border: none;")
-                self.grid_panel._target_widget = row_lbl
+            if is_target_row or is_child_target_row:
+                row_lbl.setStyleSheet("background: #fff8dc; padding: 6px; font-size: 11px; font-weight: bold; color: #1e1e1e; border: 2px solid #e6b800; border-right: none;")
+                if self.grid_panel._target_widget is None:
+                    self.grid_panel._target_widget = row_lbl
             else:
                 row_lbl.setStyleSheet("background: #f0f0f0; padding: 6px; font-size: 11px; color: #888; border: none;")
             grid_layout.addWidget(row_lbl, r + 1, 0)
@@ -347,7 +385,10 @@ class TableDisplayWidget(QWidget):
                 
                 ns_lbl = QLabel(ns_val)
                 ns_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-                ns_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none; color: #333;")
+                if is_target_row:
+                    ns_lbl.setStyleSheet("background: #fffdf0; padding: 6px; border-top: 2px solid #e6b800; border-bottom: 2px solid #e6b800; color: #333;")
+                else:
+                    ns_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none; color: #333;")
                 ns_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 grid_layout.addWidget(ns_lbl, r + 1, current_col)
                 current_col += 1
@@ -361,7 +402,9 @@ class TableDisplayWidget(QWidget):
             if not non_meta_children:
                 val_lbl = QLabel(item.value)
                 val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-                if is_target_val:
+                if is_target_row:
+                    val_lbl.setStyleSheet("background: #fffdf0; padding: 6px; border: 2px solid #e6b800;")
+                elif is_target_val:
                     val_lbl.setStyleSheet("background: #fffacd; padding: 6px; border: none;")
                     self.grid_panel._target_widget = val_lbl
                 else:
@@ -372,7 +415,19 @@ class TableDisplayWidget(QWidget):
                     col_children = [ch for ch in item.children if ch.element == col_name]
                     
                     cell_widget = QWidget()
-                    cell_widget.setStyleSheet("background: #ffffff; border: none;")
+                    cell_widget.setObjectName("tableCellWidget")
+                    is_specific_target_cell = (is_child_target_row and c == target_col_index)
+
+                    if is_specific_target_cell:
+                        cell_widget.setStyleSheet("QWidget#tableCellWidget { background: #fffdf0; border: 2px solid #e6b800; border-radius: 2px; }")
+                        # If the cell's direct single child element is itself the target, target_widget points to cell_widget
+                        if len(col_children) == 1 and col_children[0].lxml_element is target_el:
+                            self.grid_panel._target_widget = cell_widget
+                    elif is_target_row:
+                        border_right = "border-right: 2px solid #e6b800;" if c == len(columns) - 1 else ""
+                        cell_widget.setStyleSheet(f"QWidget#tableCellWidget {{ background: #fffdf0; border-top: 2px solid #e6b800; border-bottom: 2px solid #e6b800; {border_right} }}")
+                    else:
+                        cell_widget.setStyleSheet("QWidget#tableCellWidget { background: #ffffff; border: none; }")
                     cell_layout = QVBoxLayout(cell_widget)
                     cell_layout.setContentsMargins(6, 6, 6, 6)
                     cell_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -380,23 +435,18 @@ class TableDisplayWidget(QWidget):
                     if col_children:
                         if len(col_children) == 1:
                             child_node = col_children[0]
-                            is_child_target_elem = False
                             is_child_target_val = False
                             if self.grid_panel and self.grid_panel._target_search_result and child_node.lxml_element is self.grid_panel._target_search_result.element:
-                                if self.grid_panel._target_search_result.match_type == "Element":
-                                    is_child_target_elem = True
-                                    cell_widget.setStyleSheet("background: #fffacd; border: none;")
-                                    self.grid_panel._target_widget = cell_widget
-                                else:
+                                if self.grid_panel._target_search_result.match_type == "Value":
                                     is_child_target_val = True
 
                             if not child_node.children:
                                 lbl = QLabel(child_node.value)
                                 if is_child_target_val:
-                                    lbl.setStyleSheet("background: #fffacd; border: none;")
+                                    lbl.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 2px 4px; border-radius: 2px;")
                                     self.grid_panel._target_widget = lbl
                                 else:
-                                    lbl.setStyleSheet("background: transparent; border: none;") 
+                                    lbl.setStyleSheet("background: transparent; border: none; color: #1e1e1e;") 
                                 lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                                 cell_layout.addWidget(lbl)
                             else:
@@ -435,11 +485,11 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
         if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
             res = grid_panel._target_search_result
             if res.match_type == "Value":
-                lbl_val.setStyleSheet("background-color: #fffacd; color: #1e1e1e;")
+                lbl_val.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 1px 4px; border-radius: 2px;")
                 grid_panel._target_widget = lbl_val
             else:
-                w.setStyleSheet("background-color: #fffacd; border-radius: 2px;")
-                grid_panel._target_widget = w
+                lbl_elem.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 1px 4px; border-radius: 2px;")
+                grid_panel._target_widget = lbl_elem
 
         return w
         
@@ -451,15 +501,23 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
                 frame.header_widget.setStyleSheet("""
                     QWidget#expandableHeader {
                         background-color: #fffacd;
-                        border-bottom: 1px solid #d4d8dc;
+                        border-bottom: 2px solid #e6b800;
                         border-top-left-radius: 3px;
                         border-top-right-radius: 3px;
+                    }
+                """)
+                frame.setStyleSheet("""
+                    QFrame#expandableFrame {
+                        border: 2px solid #e6b800;
+                        border-radius: 3px;
+                        background-color: #ffffff;
                     }
                 """)
             else:
                 frame.header_widget.setStyleSheet("""
                     QWidget#expandableHeader {
                         background-color: #fffacd;
+                        border: 2px solid #e6b800;
                         border-radius: 3px;
                     }
                 """)
@@ -910,6 +968,20 @@ class XmlGridPanel(QWidget):
         path = find_path(self._demo_root, search_result.element)
         if not path:
             return
+
+        # Collapse all nodes first, so only the path to the target is open
+        def _collapse_nodes(node: _GridNode):
+            node.is_expanded = False
+            for ch in node.children:
+                _collapse_nodes(ch)
+
+        for child in self._demo_root.children:
+            _collapse_nodes(child)
+
+        self._demo_root.is_expanded = True
+        root_child = next((c for c in self._demo_root.children if getattr(c, "node_type", "element") != "comment"), None)
+        if root_child is not None:
+            root_child.is_expanded = True
             
         # 2. Expand all parents AND the representative (first sibling) for TableDisplayWidgets
         for i in range(1, len(path)):
@@ -937,6 +1009,39 @@ class XmlGridPanel(QWidget):
         if self._target_widget:
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(10, lambda: self.scroll_area.ensureWidgetVisible(self._target_widget))
+
+    def collapse_all(self):
+        """
+        Collapses all nodes in the grid view, leaving only the root expanded,
+        and clears any active search highlights without modifying the XML data,
+        active filters, or other view modes.
+        """
+        if not self._demo_root:
+            return
+
+        def _collapse_nodes(node: _GridNode):
+            node.is_expanded = False
+            for ch in node.children:
+                _collapse_nodes(ch)
+
+        for child in self._demo_root.children:
+            _collapse_nodes(child)
+
+        self._demo_root.is_expanded = True
+        root_child = next((c for c in self._demo_root.children if getattr(c, "node_type", "element") != "comment"), None)
+        if root_child is not None:
+            root_child.is_expanded = True
+
+        self._target_search_result = None
+        self._target_widget = None
+        self._rebuild()
+
+    def clear_highlight(self) -> bool:
+        """Clears active search highlight state and collapses the grid view to root state only if a highlight is active."""
+        if self._target_search_result is not None or self._target_widget is not None:
+            self.collapse_all()
+            return True
+        return False
 
     def _rebuild(self):
         """Rebuilds the entire UI from the data model state."""
