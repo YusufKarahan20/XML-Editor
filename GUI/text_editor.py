@@ -485,12 +485,50 @@ class XmlTextEditor(QPlainTextEdit):
         self.setExtraSelections(selections)
         self.centerCursor()
 
-    def clear_search_highlight(self) -> bool:
-        """Clears search highlights, moves cursor to top and scrolls to the beginning."""
+    def clear_search_highlight(self, reset_cursor: bool = False) -> bool:
+        """Clears search highlights, and optionally moves cursor to top and scrolls to the beginning."""
         had_highlight = len(self.extraSelections()) > 0
         self.setExtraSelections([])
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        self.setTextCursor(cursor)
-        self.verticalScrollBar().setValue(0)
+        if reset_cursor:
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            self.setTextCursor(cursor)
+            self.verticalScrollBar().setValue(0)
         return had_highlight
+
+    def navigate_to_line_col(self, line: int, col: int = 1):
+        """Navigate cursor to 1-indexed line and column, unfolding ancestors if needed."""
+        if line <= 0:
+            return
+        block_num = line - 1
+        if not (0 <= block_num < self.document().blockCount()):
+            return
+
+        self.unfold_for_line(block_num)
+        block = self.document().findBlockByNumber(block_num)
+        if not block.isValid():
+            return
+
+        cursor = QTextCursor(block)
+        col_offset = max(0, col - 1)
+        text_len = len(block.text())
+        if col_offset > text_len:
+            col_offset = text_len
+        cursor.setPosition(block.position() + col_offset)
+
+        # Highlight line with soft error background
+        error_sel = QTextEdit.ExtraSelection()
+        error_sel.cursor = QTextCursor(block)
+        error_sel.cursor.clearSelection()
+        error_sel.format.setBackground(QColor("#fce4ec"))
+        error_sel.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+        self.setExtraSelections([error_sel])
+
+        self.setTextCursor(cursor)
+        self.centerCursor()
+        self.setFocus()
+
+    def clear_error_highlight(self):
+        """Clears active syntax error line highlight."""
+        self.setExtraSelections([])
+

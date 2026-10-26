@@ -18,9 +18,10 @@ from PyQt6.QtWidgets import (
     QToolBar, QStatusBar, QLabel, QFileDialog, QMessageBox,
     QSizePolicy, QApplication,
 )
-from PyQt6.QtGui import QAction, QIcon, QKeySequence
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QCloseEvent
 from PyQt6.QtCore import Qt, QSize
 from lxml import etree
+from XML.document_session import XmlDocumentSession
 from GUI.center_panel import CenterPanel
 from SEARCH.engine import search_xml
 from GUI.json_preview import JsonPreviewPanel
@@ -57,11 +58,30 @@ class MainWindow(QMainWindow):
         self._create_toolbar()
         self._create_central_area()
         self._create_status_bar()
+        self.doc_session = XmlDocumentSession()
         self.current_xml_path = None
         self.current_xml_root = None
         self._last_valid_xml_text = ""
         self.soap_numeric_fields = None
         self.update_status(state="No XML file opened")
+        self._update_window_title()
+        self._setup_undo_redo_sync()
+
+    def _update_window_title(self):
+        """Updates the window title reflecting active file name and dirty status."""
+        file_path = self.doc_session.file_path
+        if file_path:
+            filename = file_path.name
+        elif self.doc_session.dom_root is not None:
+            filename = "Untitled.xml"
+        else:
+            filename = ""
+
+        dirty_marker = " *" if self.doc_session.is_dirty() else ""
+        if filename:
+            self.setWindowTitle(f"{self.APP_TITLE} — {filename}{dirty_marker}")
+        else:
+            self.setWindowTitle(self.APP_TITLE)
 
     # ==================================================================
     #  STYLESHEET
@@ -95,16 +115,22 @@ class MainWindow(QMainWindow):
             return action
 
         # ── File ─────────────────────────────────────────────────────
+        _action("file_new",     "New",         "Ctrl+N",  "Create a new XML document",
+                slot=self._on_new_file)
         _action("file_open",    "Open XML…",   "Ctrl+O",  "Open an XML file",
                 slot=self._open_file_dialog)
-        _action("file_save",    "Save",         "Ctrl+S",  "Save current file")
-        _action("file_save_as", "Save As…",     "Ctrl+Shift+S", "Save file as…")
+        _action("file_save",    "Save",         "Ctrl+S",  "Save current file",
+                slot=self._on_save_file)
+        _action("file_save_as", "Save As…",     "Ctrl+Shift+S", "Save file as…",
+                slot=self._on_save_file_as)
         _action("file_exit",    "Exit",         "Ctrl+Q",  "Quit application",
-                slot=self.close)
+                slot=self._on_exit)
 
         # ── Edit ─────────────────────────────────────────────────────
-        _action("edit_undo",       "Undo",       "Ctrl+Z",  "Undo last action")
-        _action("edit_redo",       "Redo",       "Ctrl+Y",  "Redo last action")
+        _action("edit_undo",       "Undo",       "Ctrl+Z",  "Undo last action",
+                slot=self._on_undo)
+        _action("edit_redo",       "Redo",       "Ctrl+Y",  "Redo last action",
+                slot=self._on_redo)
         _action("edit_copy",       "Copy",       "Ctrl+C",  "Copy selection",
                 slot=self._on_copy)
         _action("edit_paste",      "Paste",      "Ctrl+V",  "Paste from clipboard",
@@ -146,6 +172,7 @@ class MainWindow(QMainWindow):
 
         # ── File ─────────────────────────────────────────────────────
         file_menu = mb.addMenu("&File")
+        file_menu.addAction(self._actions["file_new"])
         file_menu.addAction(self._actions["file_open"])
         file_menu.addAction(self._actions["file_save"])
         file_menu.addAction(self._actions["file_save_as"])
@@ -325,6 +352,204 @@ class MainWindow(QMainWindow):
     # ==================================================================
     #  FILE HANDLING
     # ==================================================================
+    def _sync_text_view_draft(self):
+        """Flushes any pending debounced edits in Text View to doc_session immediately."""
+        editor = self.center_panel.text_view.text_edit
+        if editor._debounce_timer.isActive():
+            editor._debounce_timer.stop()
+            self._on_text_view_content_changed(editor.toPlainText())
+
+    def _on_save_file(self) -> bool:
+        """Handles File -> Save action (Ctrl+S)."""
+        # Check if there is an active document or text in Text View
+        has_content = (self.doc_session.dom_root is not None) or bool(self.center_panel.text_view.get_xml_text().strip())
+        if not has_content:
+            QMessageBox.information(
+                self,
+                "Kaydedilecek Belge Yok",
+                "Kaydedilecek açık veya düzenlenmiş bir XML belgesi bulunamadı."
+            )
+            return False
+
+        # Flush any pending typing before save
+        self._sync_text_view_draft()
+
+        # Disallow saving invalid XML drafts
+        if not self.doc_session.is_draft_valid:
+            QMessageBox.warning(
+                self,
+                "Kaydetme Başarısız",
+                "Sözdizimi hatası içeren XML taslağı kaydedilemez.\n"
+                "Lütfen önce sözdizimi hatalarını giderin."
+            )
+            return False
+
+        # If no active file path exists (e.g. pasted XML or new document), redirect to Save As
+        if not self.doc_session.file_path:
+            return self._on_save_file_as()
+
+        # Atomically save to existing active path
+        try:
+            saved_path = self.doc_session.save_file()
+            self.current_xml_path = str(saved_path)
+            self._last_valid_xml_text = self.doc_session.raw_text_draft
+            self._update_window_title()
+            self.update_status(state=f"Kaydedildi: {saved_path.name}")
+            return True
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Kaydetme Hatası",
+                f"Dosya kaydedilirken bir hata oluştu:\n{e}"
+            )
+            return False
+
+    def _on_save_file_as(self) -> bool:
+        """Handles File -> Save As action (Ctrl+Shift+S)."""
+        # Check if there is an active document or text in Text View
+        has_content = (self.doc_session.dom_root is not None) or bool(self.center_panel.text_view.get_xml_text().strip())
+        if not has_content:
+            QMessageBox.information(
+                self,
+                "Kaydedilecek Belge Yok",
+                "Kaydedilecek açık veya düzenlenmiş bir XML belgesi bulunamadı."
+            )
+            return False
+
+        # Flush any pending typing before save
+        self._sync_text_view_draft()
+
+        # Disallow saving invalid XML drafts
+        if not self.doc_session.is_draft_valid:
+            QMessageBox.warning(
+                self,
+                "Kaydetme Başarısız",
+                "Sözdizimi hatası içeren XML taslağı kaydedilemez.\n"
+                "Lütfen önce sözdizimi hatalarını giderin."
+            )
+            return False
+
+        # Prompt destination path
+        initial_dir = str(self.doc_session.file_path) if self.doc_session.file_path else "document.xml"
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save XML As",
+            initial_dir,
+            "XML Files (*.xml);;Text Files (*.txt);;All Files (*)"
+        )
+
+        if not filepath:
+            # User cancelled save dialog; preserve session and path unchanged
+            return False
+
+        # Ensure .xml extension if none provided
+        target = Path(filepath)
+        if not target.suffix:
+            filepath = str(target.with_suffix(".xml"))
+
+        # Atomically save to selected target path
+        try:
+            saved_path = self.doc_session.save_file(filepath)
+            self.current_xml_path = str(saved_path)
+            self._last_valid_xml_text = self.doc_session.raw_text_draft
+            self._update_window_title()
+            self.update_status(state=f"Farklı Kaydedildi: {saved_path.name}")
+            return True
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Kaydetme Hatası",
+                f"Dosya kaydedilirken bir hata oluştu:\n{e}"
+            )
+            return False
+
+    DEFAULT_NEW_DOCUMENT_XML = '<?xml version="1.0" encoding="UTF-8"?>\n<root>\n</root>\n'
+
+    def _maybe_save_changes(self) -> bool:
+        """
+        Flushes pending debounced edits and checks if the document has unsaved modifications.
+        Prompts user to Save, Discard, or Cancel if dirty.
+        Returns:
+            True: if document is clean, or user saved successfully, or user chose Discard.
+            False: if user cancelled, or chose Save but saving failed/was cancelled.
+        """
+        self._sync_text_view_draft()
+        if not self.doc_session.is_dirty():
+            return True
+
+        filename = self.doc_session.file_path.name if self.doc_session.file_path else (
+            "Untitled.xml" if self.doc_session.dom_root is not None else "Belge"
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Kaydedilmemiş Değişiklikler")
+        box.setText(f"'{filename}' belgesinde kaydedilmemiş değişiklikler var.\nDeğişiklikleri kaydetmek istiyor musunuz?")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save |
+            QMessageBox.StandardButton.Discard |
+            QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Save)
+
+        # Set Turkish button text
+        save_btn = box.button(QMessageBox.StandardButton.Save)
+        if save_btn:
+            save_btn.setText("Kaydet")
+        discard_btn = box.button(QMessageBox.StandardButton.Discard)
+        if discard_btn:
+            discard_btn.setText("Kaydetmeden Çık")
+        cancel_btn = box.button(QMessageBox.StandardButton.Cancel)
+        if cancel_btn:
+            cancel_btn.setText("İptal")
+
+        ret = box.exec()
+        if ret == QMessageBox.StandardButton.Save:
+            return self._on_save_file()
+        elif ret == QMessageBox.StandardButton.Discard:
+            return True
+        else:
+            return False
+
+    def _on_new_file(self) -> bool:
+        """Handles File -> New action (Ctrl+N). Prompts to save dirty document, then creates empty template."""
+        if not self._maybe_save_changes():
+            return False
+
+        template = self.DEFAULT_NEW_DOCUMENT_XML
+        try:
+            new_root = self.doc_session.load_text(template, source_path=None)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Yeni Belge Hatası",
+                f"Yeni belge şablonu oluşturulamadı:\n{e}"
+            )
+            return False
+
+        self._last_valid_xml_text = template
+        self.current_xml_root = new_root
+        self.current_xml_path = None
+
+        self.center_panel.load_xml("Untitled.xml", new_root, xml_text=template)
+        self.center_panel.set_draft_valid(True)
+        self.center_panel.text_view.clear_validation_error()
+        self.filter_panel.load_xml_root(new_root)
+        self.json_panel.clear()
+
+        # Reset previous search results and search panel
+        self.search_panel.search_input.blockSignals(True)
+        self.search_panel.clear()
+        self.search_panel.search_input.blockSignals(False)
+        self.search_results_panel.clear()
+        self.search_results_panel.hide()
+        self.center_panel.clear_search_highlight(reset_cursor=True)
+
+        node_count = sum(1 for _ in new_root.iter("*"))
+        self.update_status(state="Yeni Belge Oluşturuldu", nodes=node_count, matches=0)
+        self._update_window_title()
+        self._update_undo_redo_actions()
+        return True
+
     def _open_file_dialog(self):
         filepath, _ = QFileDialog.getOpenFileName(
             self,
@@ -332,99 +557,153 @@ class MainWindow(QMainWindow):
             "",
             "XML & Text Files (*.xml *.txt);;XML Files (*.xml);;Text Files (*.txt);;All Files (*)"
         )
-        if filepath:
-            self.load_xml_file(filepath)
+        if not filepath:
+            return
+        if not self._maybe_save_changes():
+            return
+        self.load_xml_file(filepath)
 
-    def load_xml_file(self, filepath: str):
+    def _on_exit(self):
+        """Handles File -> Exit action (Ctrl+Q)."""
+        self._user_close_requested = True
+        self.close()
+
+    def closeEvent(self, event: QCloseEvent):
+        """Intercepts window close events to protect unsaved changes."""
+        is_user_close = event.spontaneous() or getattr(self, "_user_close_requested", False)
+        self._user_close_requested = False
+
+        if is_user_close:
+            if self._maybe_save_changes():
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+
+    def load_xml_file(self, filepath: str) -> bool:
         """Validates and loads the XML file into all views."""
-        # 1. Validate XML first
+        # 1. Validate and load via session atomically
         try:
-            tree = etree.parse(filepath)
-            new_root = tree.getroot()
-            with open(filepath, "r", encoding="utf-8-sig") as f:
-                file_text = f.read()
+            new_root = self.doc_session.load_file(filepath)
+            file_text = self.doc_session.raw_text_draft
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "XML Load Error",
                 f"Could not parse the selected XML file.\nThe current view will not be changed.\n\nError: {e}"
             )
-            return
-            
+            return False
+
         # 2. XML is valid, update the views
         try:
-            self._last_valid_xml_text = file_text
-            self.center_panel.load_xml(filepath, new_root)
+            # Normalize line endings to \n to match QPlainTextEdit internal representation
+            normalized_text = file_text.replace("\r\n", "\n").replace("\r", "\n")
+            self.doc_session.raw_text_draft = normalized_text
+            self.doc_session.last_saved_text = normalized_text
+            self._last_valid_xml_text = normalized_text
+
+            self.center_panel.load_xml(filepath, new_root, xml_text=normalized_text)
+            self.center_panel.set_draft_valid(True)
+            self.center_panel.text_view.clear_validation_error()
             self.filter_panel.load_xml_root(new_root)
             self.json_panel.clear()
-            
+
             # Reset previous search results and search panel
             self.search_panel.clear()
             self.search_results_panel.clear()
             self.search_results_panel.hide()
             self.center_panel.clear_search_highlight()
-            
+
             self.current_xml_root = new_root
-            self.current_xml_path = filepath
+            self.current_xml_path = str(self.doc_session.file_path)
             filename = Path(filepath).name
-            
+
             # Calculate total element nodes (ignoring text, comments, attributes)
             node_count = sum(1 for _ in self.current_xml_root.iter("*"))
-            
+
             self.update_status(state=f"Opened: {filename}", nodes=node_count, matches=0)
+            self._update_window_title()
+            return True
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "XML Load Error",
                 f"An error occurred while populating the views:\nThe current view will not be changed.\n\nError: {e}"
             )
+            return False
 
     def _on_text_view_content_changed(self, new_text: str):
         """Validates and loads XML edited or pasted directly in Text View."""
         if new_text == self._last_valid_xml_text:
+            # If draft was invalid or validation bar is visible, user fixed/reverted back to valid text
+            if not self.doc_session.is_draft_valid or self.center_panel.text_view.validation_bar.isVisible():
+                self.doc_session.update_text_draft(new_text)
+                self.center_panel.text_view.clear_validation_error()
+                self.center_panel.set_draft_valid(True)
+                self._update_window_title()
+                filename = Path(self.doc_session.file_path).name if self.doc_session.file_path else "<Pasted XML>"
+                node_count = sum(1 for _ in self.current_xml_root.iter("*")) if self.current_xml_root is not None else 0
+                self.update_status(state=f"Ready: {filename}", nodes=node_count, matches=0)
             return
 
-        if not new_text.strip():
-            if self.current_xml_root is None:
-                return
-
-        import io
-        try:
-            tree = etree.parse(io.BytesIO(new_text.encode("utf-8")))
-            new_root = tree.getroot()
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "XML Load Error",
-                f"Could not parse the XML content from Text View.\nThe current view will not be changed.\n\nError: {e}"
-            )
-            self.center_panel.revert_text(self._last_valid_xml_text)
+        if not new_text.strip() and self.current_xml_root is None:
             return
 
+        # Validate draft through XmlDocumentSession
+        is_valid = self.doc_session.update_text_draft(new_text)
+
+        if not is_valid:
+            # Syntax error: preserve user draft, show validation bar, do NOT revert text
+            errors = self.doc_session.syntax_errors
+            if errors:
+                first_err = errors[0]
+                line = first_err.line
+                col = first_err.column
+                msg = first_err.message
+            else:
+                line, col, msg = 1, 1, "XML syntax error"
+
+            self.center_panel.text_view.show_validation_errors(errors)
+            self.center_panel.set_draft_valid(False)
+            self._update_window_title()
+            if len(errors) > 1:
+                self.update_status(state=f"Sözdizimi Hatası ({len(errors)} hata, ilk: Satır {line})")
+            else:
+                self.update_status(state=f"Sözdizimi Hatası (Satır {line})")
+            return
+
+        # Valid XML: update canonical DOM and views
         try:
+            new_root = self.doc_session.dom_root
             self._last_valid_xml_text = new_text
-            self.center_panel.load_xml_from_text(new_text, new_root, source_name="<Pasted XML>")
+
+            # Clear validation error & sync banner
+            self.center_panel.text_view.clear_validation_error()
+            self.center_panel.set_draft_valid(True)
+
+            source_name = str(self.doc_session.file_path) if self.doc_session.file_path else "<Pasted XML>"
+            self.center_panel.load_xml_from_text(new_text, new_root, source_name=source_name)
             self.filter_panel.load_xml_root(new_root)
             self.json_panel.clear()
 
-            # Reset previous search results and search panel
+            # Reset previous search results and search panel without displacing user's editor cursor
+            self.search_panel.search_input.blockSignals(True)
             self.search_panel.clear()
+            self.search_panel.search_input.blockSignals(False)
             self.search_results_panel.clear()
             self.search_results_panel.hide()
-            self.center_panel.clear_search_highlight()
+            self.center_panel.clear_search_highlight(reset_cursor=False)
 
             self.current_xml_root = new_root
-            self.current_xml_path = None
+            if self.doc_session.file_path:
+                self.current_xml_path = str(self.doc_session.file_path)
 
             node_count = sum(1 for _ in self.current_xml_root.iter("*"))
             self.update_status(state="Loaded from Text View", nodes=node_count, matches=0)
+            self._update_window_title()
         except Exception as e:
-            QMessageBox.warning(
-                self,
-                "XML Load Error",
-                f"An error occurred while populating the views:\nThe current view will not be changed.\n\nError: {e}"
-            )
-            self.center_panel.revert_text(self._last_valid_xml_text)
+            self.statusBar().showMessage(f"Görünüm güncelleme hatası: {e}", 5000)
 
     # ==================================================================
     #  SEARCH HANDLING
@@ -435,7 +714,7 @@ class MainWindow(QMainWindow):
             self.search_results_panel.clear()
             self.search_results_panel.hide()
             self.update_status(matches=0)
-            self.center_panel.clear_search_highlight()
+            self.center_panel.clear_search_highlight(reset_cursor=True)
             return
 
         if self.current_xml_root is None:
@@ -687,6 +966,53 @@ class MainWindow(QMainWindow):
     # ==================================================================
     #  EDIT HANDLING
     # ==================================================================
+    def _setup_undo_redo_sync(self):
+        """Connects signals for synchronizing Undo/Redo actions with the active editor and tab."""
+        editor = self.center_panel.text_view.text_edit
+        editor.undoAvailable.connect(self._on_undo_available_changed)
+        editor.redoAvailable.connect(self._on_redo_available_changed)
+        self.center_panel.tabs.currentChanged.connect(self._update_undo_redo_actions)
+        self._update_undo_redo_actions()
+
+    def _on_undo_available_changed(self, available: bool):
+        """Updates Undo action enabled state when Text View is active."""
+        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+            action = self._actions.get("edit_undo")
+            if action:
+                action.setEnabled(available)
+
+    def _on_redo_available_changed(self, available: bool):
+        """Updates Redo action enabled state when Text View is active."""
+        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+            action = self._actions.get("edit_redo")
+            if action:
+                action.setEnabled(available)
+
+    def _update_undo_redo_actions(self, *args):
+        """Synchronizes Undo and Redo action states based on current tab and editor availability."""
+        undo_action = self._actions.get("edit_undo")
+        redo_action = self._actions.get("edit_redo")
+        if not undo_action or not redo_action:
+            return
+
+        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+            doc = self.center_panel.text_view.text_edit.document()
+            undo_action.setEnabled(doc.isUndoAvailable())
+            redo_action.setEnabled(doc.isRedoAvailable())
+        else:
+            undo_action.setEnabled(False)
+            redo_action.setEnabled(False)
+
+    def _on_undo(self):
+        """Triggers undo in Text View if it is active."""
+        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+            self.center_panel.text_view.text_edit.undo()
+
+    def _on_redo(self):
+        """Triggers redo in Text View if it is active."""
+        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+            self.center_panel.text_view.text_edit.redo()
+
     def _on_copy(self):
         """Copies selection from the focused widget or JSON preview."""
         focused = QApplication.focusWidget()
