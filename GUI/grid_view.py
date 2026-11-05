@@ -9,13 +9,525 @@ Implements Altova XMLSpy-style Grid View:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 from lxml import etree
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
-    QGridLayout, QPushButton, QSizePolicy, QMessageBox
+    QGridLayout, QPushButton, QSizePolicy, QMessageBox, QLineEdit,
+    QMenu, QDialog, QApplication
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QUndoStack, QUndoCommand
+
+
+def _is_node_editable(node: _GridNode, session: Optional[object] = None) -> bool:
+    """
+    Validates whether a grid node is safely editable.
+    Requirements:
+      1. Valid XML session draft (if session provided, is_draft_valid must be True).
+      2. Must be an element node (node_type == 'element') or element_text (node_type == 'element_text').
+      3. Not a namespace declaration, prefix, or synthetic non-leaf node (@xmlns, xmlns:*).
+      4. Must have an associated lxml element with a valid tag string.
+      5. Must not have any child elements in DOM (len(lxml_element) == 0).
+      6. Must not have any child nodes in Grid model (len(node.children) == 0).
+      7. Must not have meaningful tail text (mixed content).
+    """
+    if session is not None and hasattr(session, "is_draft_valid") and not session.is_draft_valid:
+        return False
+    if node is None:
+        return False
+
+    # Leaf text node under local namespace declaration element
+    if getattr(node, "node_type", "element") == "element_text":
+        if node.lxml_element is None or not isinstance(node.lxml_element.tag, str):
+            return False
+        if len(node.lxml_element) > 0:
+            return False
+        return True
+
+    if getattr(node, "node_type", "element") != "element":
+        return False
+    if node.element in ("@xmlns", "Text") or node.element.startswith("xmlns:") or node.element == "xmlns":
+        return False
+    if node.lxml_element is None or not isinstance(node.lxml_element.tag, str):
+        return False
+    if len(node.lxml_element) > 0:
+        return False
+    if len(node.children) > 0:
+        return False
+    if node.lxml_element.tail and node.lxml_element.tail.strip():
+        return False
+    return True
+
+
+class SetNodeTextCommand(QUndoCommand):
+    """Command for updating the text value of a leaf node in Grid View."""
+
+    def __init__(
+        self,
+        node: _GridNode,
+        element: etree._Element,
+        old_text: Optional[str],
+        new_text: str,
+        session: Optional[object],
+        grid_panel: XmlGridPanel,
+        old_node_val: str,
+    ):
+        super().__init__()
+        self.node = node
+        self.element = element
+        self.old_text = old_text
+        self.new_text = new_text
+        self.session = session
+        self.grid_panel = grid_panel
+        self.old_node_val = old_node_val
+        self._failed = False
+        self.setText(f"Edit {node.element}: {new_text}")
+
+    def redo(self):
+        if self._failed or self.grid_panel.is_undo_redo_blocked():
+            return
+
+        # 1. Update live DOM element
+        self.element.text = self.new_text
+
+        # 2. Update document session draft
+        if self.session is not None:
+            success = self.session.update_from_dom()
+            if not success:
+                # Rollback DOM
+                self.element.text = self.old_text
+                rollback_success = True
+                if self.session is not None:
+                    rollback_success = self.session.update_from_dom()
+
+                self._failed = True
+                self._critical_failure = not rollback_success
+                if not rollback_success:
+                    self.grid_panel.lock_undo_redo(
+                        "KRİTİK HATA: Değer güncelleme serileştirme hatası aldı ve DOM rollback işlemi de başarısız oldu. "
+                        "Belge oturumu tutarsız olabilir. Lütfen belgenizi derhal farklı kaydedin veya yeniden yükleyin.",
+                        critical=True
+                    )
+                else:
+                    self.grid_panel.lock_undo_redo(
+                        "İşlem Hatası: Düğüm değeri güncellenirken serileştirme hatası oluştu. Değişiklik geri alındı. "
+                        "Geçmiş bütünlüğünü korumak için Grid Undo/Redo kilitlendi.",
+                        critical=False
+                    )
+                self.grid_panel._rebuild()
+                return
+
+        # 3. Update Grid model
+        self.node.value = self.new_text
+
+        # 4. Filter check, signals, and view refresh
+        self.grid_panel._on_node_text_updated(self.node, self.old_node_val, self.new_text)
+
+    def undo(self):
+        if self._failed or self.grid_panel.is_undo_redo_blocked():
+            return
+
+        # 1. Rollback DOM element (preserving None)
+        self.element.text = self.old_text
+
+        # 2. Update document session draft
+        if self.session is not None:
+            success = self.session.update_from_dom()
+            if not success:
+                # Rollback DOM to new_text so state is not half-applied
+                self.element.text = self.new_text
+                rollback_success = True
+                if self.session is not None:
+                    rollback_success = self.session.update_from_dom()
+
+                self._failed = True
+                self._critical_failure = not rollback_success
+                if not rollback_success:
+                    self.grid_panel.lock_undo_redo(
+                        "KRİTİK HATA: Geri alma serileştirme hatası aldı ve DOM rollback işlemi de başarısız oldu. "
+                        "Belge oturumu tutarsız olabilir. Lütfen belgenizi derhal farklı kaydedin veya yeniden yükleyin.",
+                        critical=True
+                    )
+                else:
+                    self.grid_panel.lock_undo_redo(
+                        "Geri Alma Hatası: Geri alma sırasında serileştirme hatası oluştu. Durum korundu. "
+                        "Geçmiş bütünlüğünü korumak için Grid Undo/Redo kilitlendi.",
+                        critical=False
+                    )
+                self.grid_panel._rebuild()
+                return
+
+        # 3. Update Grid model
+        self.node.value = self.old_node_val
+
+        # 4. Filter check, signals, and view refresh
+        self.grid_panel._on_node_text_updated(self.node, self.new_text, self.old_node_val)
+
+
+class GridCellEditor(QLineEdit):
+    """Inline cell editor for editable leaf nodes in Grid View."""
+
+    def __init__(self, node: _GridNode, grid_panel: XmlGridPanel, original_label: Optional[QLabel], parent=None):
+        super().__init__(node.value or "", parent)
+        self.node = node
+        self.grid_panel = grid_panel
+        self.original_label = original_label
+        self._is_committing = False
+
+        self.setStyleSheet("""
+            QLineEdit {
+                background: #ffffff;
+                color: #1e1e1e;
+                border: 2px solid #0066cc;
+                border-radius: 2px;
+                padding: 1px 4px;
+                font-family: inherit;
+                font-size: 11px;
+            }
+        """)
+        self.selectAll()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.commit()
+            event.accept()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.cancel()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if not self._is_committing:
+            self.commit()
+
+    def commit(self):
+        if self._is_committing:
+            return
+        self._is_committing = True
+        new_val = self.text()
+        self.grid_panel.commit_cell_edit(self.node, new_val, self.original_label, self)
+
+    def cancel(self):
+        if self._is_committing:
+            return
+        self._is_committing = True
+        self.grid_panel.cancel_cell_edit(self.original_label, self)
+
+
+def get_element_xml_path(element: Optional[etree._Element], expected_root: Optional[etree._Element] = None) -> str:
+    """
+    Constructs a canonical, human-readable XML path for the given lxml element.
+    Format: /Root/Customer/Address/City
+    If identical tag siblings (same expanded tag in DOM) exist under a parent,
+    a 1-based index is appended: e.g. /Root/Orders/Order[2]/Items/Item[1]/Price
+    Namespace prefixes are preserved using the element's bound prefix if present:
+    e.g. /soapenv:Envelope/soapenv:Body/ns1:Order
+    If expected_root is provided, verifies that element is connected to expected_root.
+    Returns empty string if element is None, detached from expected_root, or invalid.
+    """
+    if element is None or not isinstance(getattr(element, "tag", None), str):
+        return ""
+
+    path_parts = []
+    current = element
+    reached_root = False
+
+    while current is not None and isinstance(getattr(current, "tag", None), str):
+        # 1. Resolve display tag with prefix if bound, else localname
+        qname = etree.QName(current)
+        display_tag = f"{current.prefix}:{qname.localname}" if current.prefix else qname.localname
+
+        # 2. Sibling indexing: only compare elements with the EXACT same expanded tag (child.tag == current.tag)
+        parent = current.getparent()
+        if parent is not None:
+            same_tag_siblings = [
+                ch for ch in parent
+                if isinstance(getattr(ch, "tag", None), str) and ch.tag == current.tag
+            ]
+            if len(same_tag_siblings) > 1:
+                index = same_tag_siblings.index(current) + 1
+                display_tag = f"{display_tag}[{index}]"
+
+        path_parts.append(display_tag)
+
+        if expected_root is not None and current is expected_root:
+            reached_root = True
+            break
+
+        current = parent
+
+    if expected_root is not None and not reached_root:
+        return ""
+
+    path_parts.reverse()
+    return "/" + "/".join(path_parts) if path_parts else ""
+
+
+class XmlPathDialog(QDialog):
+    """Small and clean modal dialog displaying the canonical XML Path with copy-to-clipboard."""
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self.path = path
+        self.setWindowTitle("XML Path")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.setFixedHeight(140)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        header_layout = QHBoxLayout()
+        header_label = QLabel("XML Element Path:")
+        header_label.setStyleSheet("font-weight: 600; color: #333333; font-size: 12px;")
+        header_layout.addWidget(header_label)
+
+        self.copied_feedback = QLabel("")
+        self.copied_feedback.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        header_layout.addStretch()
+        header_layout.addWidget(self.copied_feedback)
+        layout.addLayout(header_layout)
+
+        self.path_edit = QLineEdit(path, self)
+        self.path_edit.setReadOnly(True)
+        self.path_edit.setCursorPosition(0)
+        self.path_edit.setStyleSheet("""
+            QLineEdit {
+                background: #f8f9fa;
+                border: 1px solid #ced4da;
+                border-radius: 3px;
+                padding: 6px 8px;
+                font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                color: #212529;
+            }
+            QLineEdit:focus {
+                border-color: #80bdff;
+                background: #ffffff;
+            }
+        """)
+        layout.addWidget(self.path_edit)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        self.copy_btn = QPushButton("Kopyala", self)
+        self.copy_btn.setFixedWidth(90)
+        self.copy_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0066cc;
+                color: white;
+                border: none;
+                border-radius: 3px;
+                padding: 5px 12px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #0052a3;
+            }
+            QPushButton:pressed {
+                background-color: #003d7a;
+            }
+        """)
+        self.copy_btn.clicked.connect(self._copy_to_clipboard)
+        btn_layout.addWidget(self.copy_btn)
+
+        self.close_btn = QPushButton("Kapat", self)
+        self.close_btn.setFixedWidth(80)
+        self.close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f1f3f4;
+                color: #333333;
+                border: 1px solid #dadce0;
+                border-radius: 3px;
+                padding: 5px 12px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #e8eaed;
+            }
+            QPushButton:pressed {
+                background-color: #dadce0;
+            }
+        """)
+        self.close_btn.clicked.connect(self._on_close)
+        btn_layout.addWidget(self.close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _on_close(self):
+        self.close()
+
+    def _copy_to_clipboard(self):
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(self.path)
+            self.copied_feedback.setText("✓ Panoya kopyalandı")
+
+
+class GridCellLabel(QLabel):
+    """Clickable and editable label for leaf node values in Grid View."""
+
+    def __init__(self, node: _GridNode, grid_panel: Optional[XmlGridPanel], parent=None):
+        super().__init__(node.value or "", parent)
+        self.node = node
+        self.grid_panel = grid_panel
+        self.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        session = getattr(grid_panel, "doc_session", None) if grid_panel else None
+        if _is_node_editable(node, session):
+            self.setToolTip("Değeri düzenlemek için çift tıklayın veya F2 tuşuna basın. Değeri silmek için Delete tuşuna basın.")
+            self.setCursor(Qt.CursorShape.IBeamCursor)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.grid_panel:
+            session = getattr(self.grid_panel, "doc_session", None)
+            if _is_node_editable(self.node, session):
+                self.grid_panel.start_cell_edit(self.node, self)
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):
+        if self.grid_panel:
+            session = getattr(self.grid_panel, "doc_session", None)
+            if event.key() == Qt.Key.Key_F2:
+                if _is_node_editable(self.node, session):
+                    self.grid_panel.start_cell_edit(self.node, self)
+                    event.accept()
+                    return
+            elif event.key() == Qt.Key.Key_Delete:
+                if _is_node_editable(self.node, session):
+                    self.grid_panel.commit_delete_value(self.node, self)
+                    event.accept()
+                    return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        if not self.grid_panel:
+            super().contextMenuEvent(event)
+            return
+
+        session = getattr(self.grid_panel, "doc_session", None)
+        menu = QMenu(self.grid_panel if self.grid_panel is not None else self)
+        edit_act = None
+        del_val_act = None
+
+        if _is_node_editable(self.node, session):
+            edit_act = menu.addAction("Değeri Düzenle (F2)")
+            del_val_act = menu.addAction("Değeri Sil / Boşalt (Delete)")
+
+        show_path_act = menu.addAction("Path'i Göster")
+
+        if not menu.actions():
+            super().contextMenuEvent(event)
+            return
+
+        action = menu.exec(event.globalPos())
+        if action == edit_act:
+            self.grid_panel.start_cell_edit(self.node, self)
+        elif action == del_val_act:
+            self.grid_panel.commit_delete_value(self.node, self)
+        elif action == show_path_act:
+            self.show_path_dialog()
+
+    def show_path_dialog(self):
+        element = getattr(self.node, "lxml_element", None)
+        expected_root = None
+        if self.grid_panel is not None:
+            expected_root = getattr(self.grid_panel, "_current_root", None)
+            if expected_root is None:
+                session = getattr(self.grid_panel, "doc_session", None)
+                if session is not None:
+                    expected_root = getattr(session, "dom_root", None)
+
+        path = get_element_xml_path(element, expected_root=expected_root)
+        if not path:
+            QMessageBox.warning(
+                self.grid_panel if self.grid_panel is not None else self,
+                "XML Path",
+                "Seçilen hücre için geçerli bir XML path bilgisi üretilemedi."
+            )
+            return
+
+        dlg = XmlPathDialog(path, parent=self.grid_panel if self.grid_panel is not None else self)
+        dlg.exec()
+
+
+class GridElementLabel(QLabel):
+    """Read-only selectable label for XML element tags in Grid View."""
+
+    def __init__(self, node: _GridNode, grid_panel: Optional[XmlGridPanel], parent=None):
+        super().__init__(f"<b>{node.element}</b>", parent)
+        self.node = node
+        self.grid_panel = grid_panel
+        self.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+    def mouseDoubleClickEvent(self, event):
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        if not self.grid_panel:
+            super().contextMenuEvent(event)
+            return
+
+        menu = QMenu(self.grid_panel if self.grid_panel is not None else self)
+        copy_act = menu.addAction("Kopyala")
+        select_all_act = menu.addAction("Tümünü Seç")
+        menu.addSeparator()
+        show_path_act = menu.addAction("Path'i Göster")
+
+        action = menu.exec(event.globalPos())
+        if action == copy_act:
+            self.copy_text()
+        elif action == select_all_act:
+            self.select_all_text()
+        elif action == show_path_act:
+            self.show_path_dialog()
+
+    def copy_text(self):
+        text_to_copy = self.selectedText() if self.hasSelectedText() else self.node.element
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text_to_copy)
+
+    def select_all_text(self):
+        self.setFocus()
+        self.setSelection(0, len(self.node.element))
+
+    def show_path_dialog(self):
+        element = getattr(self.node, "lxml_element", None)
+        expected_root = None
+        if self.grid_panel is not None:
+            expected_root = getattr(self.grid_panel, "_current_root", None)
+            if expected_root is None:
+                session = getattr(self.grid_panel, "doc_session", None)
+                if session is not None:
+                    expected_root = getattr(session, "dom_root", None)
+
+        path = get_element_xml_path(element, expected_root=expected_root)
+        if not path:
+            QMessageBox.warning(
+                self.grid_panel if self.grid_panel is not None else self,
+                "XML Path",
+                "Seçilen element için geçerli bir XML path bilgisi üretilemedi."
+            )
+            return
+
+        dlg = XmlPathDialog(path, parent=self.grid_panel if self.grid_panel is not None else self)
+        dlg.exec()
 
 
 class _GridNode:
@@ -102,10 +614,12 @@ def _get_consecutive_chunks(children: list[_GridNode]) -> list[list[_GridNode]]:
 # =====================================================================
 class HeaderWidget(QWidget):
     """Clickable header for the ExpandableFrame."""
-    def __init__(self, node: _GridNode, toggle_callback, parent=None):
+    def __init__(self, node: _GridNode, toggle_callback, grid_panel: Optional[XmlGridPanel] = None, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.node = node
         self.toggle_callback = toggle_callback
+        self.grid_panel = grid_panel
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
@@ -132,9 +646,8 @@ class HeaderWidget(QWidget):
         """)
         self.toggle_btn.clicked.connect(self.toggle_callback)
         
-        self.title_label = QLabel(node.element)
-        self.title_label.setStyleSheet("font-weight: bold; color: #1e1e1e; font-size: 12px; background: transparent;")
-        self.title_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.title_label = GridElementLabel(node, grid_panel)
+        self.title_label.setStyleSheet("QLabel { font-weight: bold; color: #1e1e1e; font-size: 12px; background: transparent; }")
         
         layout.addWidget(self.toggle_btn)
         layout.addWidget(self.title_label)
@@ -148,10 +661,11 @@ class HeaderWidget(QWidget):
 class ExpandableFrame(QFrame):
     """A generic frame that can be expanded/collapsed with Altova XMLSpy-style border and header."""
 
-    def __init__(self, node: _GridNode, on_rebuild, parent=None):
+    def __init__(self, node: _GridNode, on_rebuild, grid_panel=None, parent=None):
         super().__init__(parent)
         self.node = node
         self.on_rebuild = on_rebuild
+        self.grid_panel = grid_panel
         
         self.setObjectName("expandableFrame")
         self.setStyleSheet("""
@@ -167,7 +681,7 @@ class ExpandableFrame(QFrame):
         self.main_layout.setSpacing(0)
         
         # Header
-        self.header_widget = HeaderWidget(node, self.toggle)
+        self.header_widget = HeaderWidget(node, self.toggle, grid_panel)
         self.header_widget.setObjectName("expandableHeader")
         if node.is_expanded:
             self.header_widget.setStyleSheet("""
@@ -284,7 +798,8 @@ class TableDisplayWidget(QWidget):
             
         # Grid frame oluşturma
         grid_frame = QFrame()
-        grid_frame.setStyleSheet("QFrame { background: #d8d8d8; border: 1px solid #c8c8c8; }")
+        grid_frame.setObjectName("gridTableFrame")
+        grid_frame.setStyleSheet("QFrame#gridTableFrame { background: #d8d8d8; border: 1px solid #c8c8c8; }")
         grid_layout = QGridLayout(grid_frame)
         grid_layout.setContentsMargins(0, 0, 0, 0)
         grid_layout.setSpacing(1)
@@ -356,9 +871,15 @@ class TableDisplayWidget(QWidget):
             is_child_target_row = (is_target_elem_in_table and r == target_row_index)
 
             # Row number
-            row_lbl = QLabel(str(r + 1))
+            is_out_of_filter = bool(self.grid_panel and hasattr(self.grid_panel, "_out_of_filter_elements")
+                                    and item.lxml_element in self.grid_panel._out_of_filter_elements)
+            row_text = f"{r + 1} ⚠️" if is_out_of_filter else str(r + 1)
+            row_lbl = QLabel(row_text)
             row_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignTop)
-            if is_target_row or is_child_target_row:
+            if is_out_of_filter:
+                row_lbl.setStyleSheet("background: #ffe0b2; padding: 6px; font-size: 11px; font-weight: bold; color: #b78103; border: 1px solid #ffb74d;")
+                row_lbl.setToolTip("Bu kayıt düzenleme sonrasında aktif filtre kriterini karşılamamaktadır.")
+            elif is_target_row or is_child_target_row:
                 row_lbl.setStyleSheet("background: #fff8dc; padding: 6px; font-size: 11px; font-weight: bold; color: #1e1e1e; border: 2px solid #e6b800; border-right: none;")
                 if self.grid_panel._target_widget is None:
                     self.grid_panel._target_widget = row_lbl
@@ -400,13 +921,16 @@ class TableDisplayWidget(QWidget):
                 if ch.element != "@xmlns" and getattr(ch, "node_type", "element") != "comment"
             ]
             if not non_meta_children:
-                val_lbl = QLabel(item.value)
+                val_lbl = GridCellLabel(item, self.grid_panel) if self.grid_panel else QLabel(item.value)
                 val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-                if is_target_row:
+                if is_out_of_filter:
+                    val_lbl.setStyleSheet("background: #fff8e1; padding: 6px; border: 1px dashed #ffb74d; color: #333;")
+                elif is_target_row:
                     val_lbl.setStyleSheet("background: #fffdf0; padding: 6px; border: 2px solid #e6b800;")
                 elif is_target_val:
                     val_lbl.setStyleSheet("background: #fffacd; padding: 6px; border: none;")
-                    self.grid_panel._target_widget = val_lbl
+                    if self.grid_panel:
+                        self.grid_panel._target_widget = val_lbl
                 else:
                     val_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none;")
                 grid_layout.addWidget(val_lbl, r + 1, current_col)
@@ -441,13 +965,14 @@ class TableDisplayWidget(QWidget):
                                     is_child_target_val = True
 
                             if not child_node.children:
-                                lbl = QLabel(child_node.value)
+                                lbl = GridCellLabel(child_node, self.grid_panel) if self.grid_panel else QLabel(child_node.value)
                                 if is_child_target_val:
                                     lbl.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 2px 4px; border-radius: 2px;")
                                     self.grid_panel._target_widget = lbl
+                                elif is_out_of_filter:
+                                    lbl.setStyleSheet("background-color: #fff8e1; color: #1e1e1e; padding: 2px 4px; border: 1px dashed #ffb74d; border-radius: 2px;")
                                 else:
-                                    lbl.setStyleSheet("background: transparent; border: none; color: #1e1e1e;") 
-                                lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                                    lbl.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
                                 cell_layout.addWidget(lbl)
                             else:
                                 nested = render_node(child_node, self.on_rebuild, self.grid_panel)
@@ -475,11 +1000,22 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
         l = QHBoxLayout(w)
         l.setContentsMargins(4, 2, 4, 2)
         l.setSpacing(8)
-        lbl_elem = QLabel(f"<b>{node.element}</b>")
-        lbl_elem.setStyleSheet("color: #1e1e1e;")
-        lbl_val = QLabel(node.value)
+        lbl_elem = GridElementLabel(node, grid_panel)
+        lbl_elem.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+        lbl_val = GridCellLabel(node, grid_panel) if grid_panel else QLabel(node.value)
+        if not isinstance(lbl_val, GridCellLabel):
+            lbl_val.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
         l.addWidget(lbl_elem)
         l.addWidget(lbl_val)
+
+        is_out = bool(grid_panel and hasattr(grid_panel, "_out_of_filter_elements")
+                      and node.lxml_element in grid_panel._out_of_filter_elements)
+        if is_out:
+            badge = QLabel("⚠️ [Filtre Dışı]")
+            badge.setStyleSheet("color: #b78103; font-size: 11px; font-weight: bold; background: transparent;")
+            badge.setToolTip("Bu kayıt düzenleme sonrasında aktif filtre kriterini karşılamamaktadır.")
+            l.addWidget(badge)
+
         l.addStretch()
 
         if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
@@ -493,7 +1029,7 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
 
         return w
         
-    frame = ExpandableFrame(node, on_rebuild)
+    frame = ExpandableFrame(node, on_rebuild, grid_panel)
 
     if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
         if grid_panel._target_search_result.match_type == "Element":
@@ -606,7 +1142,13 @@ def _parse_xml_to_grid(filepath: str, xml_root=None) -> _GridNode:
                 ns_node.append_child(_GridNode(pfx_str, uri))
             node.append_child(ns_node)
             
-            if text_val:
+            # If element is a leaf (no XML child elements), create editable Text node
+            if len(xml_el) == 0:
+                text_child = _GridNode("Text", text_val, node_type="element_text")
+                text_child.lxml_element = xml_el
+                node.append_child(text_child)
+                node.value = ""
+            elif text_val:
                 node.append_child(_GridNode("Text", text_val))
                 node.value = ""
                 
@@ -888,11 +1430,276 @@ def _prune_grid_node(node: _GridNode, subpath: list[str], condition: str, value:
 class XmlGridPanel(QWidget):
     """Altova XMLSpy-style nested Grid View prototype."""
 
+    node_value_changed = pyqtSignal(object, str, str)  # (node, old_value, new_value)
+    document_modified = pyqtSignal()
+    undo_available_changed = pyqtSignal(bool)
+    redo_available_changed = pyqtSignal(bool)
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.doc_session = None
+        self.grid_undo_stack = QUndoStack(self)
+        self.grid_undo_stack.canUndoChanged.connect(self._on_stack_can_undo_changed)
+        self.grid_undo_stack.canRedoChanged.connect(self._on_stack_can_redo_changed)
+        self._undo_redo_blocked: bool = False
+        self._history_error_message: str = ""
+        self._out_of_filter_elements: set[etree._Element] = set()
+        self._active_filter_text: str = ""
+        self._active_filter_path: list[str] | None = None
+        self._active_filter_condition: str | None = None
+        self._active_filter_value: str | None = None
+        self._active_filtered_elements: list[etree._Element] | None = None
+
         self._target_search_result = None
         self._target_widget = None
         self._setup_ui()
+
+    def set_document_session(self, session):
+        self.doc_session = session
+
+    def _on_stack_can_undo_changed(self, available: bool):
+        if not self._undo_redo_blocked:
+            self.undo_available_changed.emit(available)
+        else:
+            self.undo_available_changed.emit(False)
+
+    def _on_stack_can_redo_changed(self, available: bool):
+        if not self._undo_redo_blocked:
+            self.redo_available_changed.emit(available)
+        else:
+            self.redo_available_changed.emit(False)
+
+    def lock_undo_redo(self, message: str, critical: bool = False):
+        """Locks Grid Undo/Redo when stack index and DOM state diverge or on rollback failure."""
+        self._undo_redo_blocked = True
+        self._history_error_message = message
+        self.undo_available_changed.emit(False)
+        self.redo_available_changed.emit(False)
+        if critical:
+            QMessageBox.critical(self, "Kritik Belge Hatası", message)
+        else:
+            QMessageBox.warning(self, "İşlem Uyarısı", message)
+
+    def is_undo_redo_blocked(self) -> bool:
+        return getattr(self, "_undo_redo_blocked", False)
+
+    def can_undo(self) -> bool:
+        if self._undo_redo_blocked:
+            return False
+        return self.grid_undo_stack.canUndo()
+
+    def can_redo(self) -> bool:
+        if self._undo_redo_blocked:
+            return False
+        return self.grid_undo_stack.canRedo()
+
+    def undo(self):
+        if self._undo_redo_blocked:
+            QMessageBox.warning(
+                self,
+                "İşlem Engellendi",
+                f"Grid Undo/Redo devre dışı bırakılmıştır:\n{self._history_error_message}"
+            )
+            return
+        self.grid_undo_stack.undo()
+
+    def redo(self):
+        if self._undo_redo_blocked:
+            QMessageBox.warning(
+                self,
+                "İşlem Engellendi",
+                f"Grid Undo/Redo devre dışı bırakılmıştır:\n{self._history_error_message}"
+            )
+            return
+        self.grid_undo_stack.redo()
+
+    def _prepare_for_command_push(self) -> bool:
+        """
+        Prepares the undo stack before pushing a new command.
+        If undo/redo is currently locked:
+          - Verifies DOM and DocumentSession consistency (is_draft_valid).
+          - Clears the old history from grid_undo_stack before the new command is pushed.
+          - Clears the lock flag.
+        Returns True if safe to proceed, False otherwise.
+        """
+        if self._undo_redo_blocked:
+            session = getattr(self, "doc_session", None)
+            if session is not None:
+                if hasattr(session, "is_draft_valid") and not session.is_draft_valid:
+                    QMessageBox.warning(
+                        self,
+                        "Kilitli Geçmiş",
+                        "Belge oturumu geçersiz bir durumda olduğu için işlem gerçekleştirilemiyor."
+                    )
+                    return False
+            # Clear old history prior to pushing new command
+            self.grid_undo_stack.clear()
+            self._undo_redo_blocked = False
+            self._history_error_message = ""
+        return True
+
+    def _sync_demo_root_from_dom(self):
+        """Synchronizes grid model tree from canonical DOM root while preserving expansion states."""
+        root = self._current_root
+        if getattr(self, "doc_session", None) is not None and self.doc_session.dom_root is not None:
+            root = self.doc_session.dom_root
+            self._current_root = root
+        if root is not None:
+            expanded_elements = set()
+            def collect_expanded(node: _GridNode):
+                if node.is_expanded and node.lxml_element is not None:
+                    expanded_elements.add(node.lxml_element)
+                for ch in node.children:
+                    collect_expanded(ch)
+            if self._demo_root:
+                collect_expanded(self._demo_root)
+
+            self._demo_root = _parse_xml_to_grid("", root)
+
+            def restore_expanded(node: _GridNode):
+                if node.lxml_element in expanded_elements:
+                    node.is_expanded = True
+                for ch in node.children:
+                    restore_expanded(ch)
+            restore_expanded(self._demo_root)
+        self._rebuild()
+
+    def commit_delete_value(self, node: _GridNode, label: Optional[QLabel] = None, editor: Optional[QLineEdit] = None):
+        """Clears/empties the value of an editable leaf node, keeping the element itself."""
+        self.commit_cell_edit(node, "", label, editor)
+
+    def start_cell_edit(self, node: _GridNode, label: QLabel):
+        """Initiates in-place editing of a leaf node using QLineEdit."""
+        session = getattr(self, "doc_session", None)
+        if not _is_node_editable(node, session):
+            return
+
+        parent_widget = label.parentWidget()
+        if not parent_widget:
+            return
+
+        layout = parent_widget.layout()
+        if not layout:
+            return
+
+        editor = GridCellEditor(node, self, label, parent_widget)
+        if isinstance(layout, QGridLayout):
+            idx = layout.indexOf(label)
+            if idx != -1:
+                row, col, row_span, col_span = layout.getItemPosition(idx)
+                label.hide()
+                layout.addWidget(editor, row, col, row_span, col_span)
+                editor.setFocus()
+                editor.selectAll()
+        else:
+            idx = layout.indexOf(label)
+            if idx != -1:
+                label.hide()
+                layout.insertWidget(idx, editor)
+                editor.setFocus()
+                editor.selectAll()
+
+    def cancel_cell_edit(self, label: Optional[QLabel], editor: Optional[QLineEdit]):
+        """Cancels cell editing, restores the original label, and cleans up editor."""
+        if editor is not None:
+            editor.hide()
+            editor.setParent(None)
+            editor.deleteLater()
+        if label is not None:
+            label.show()
+            label.setFocus()
+
+    def commit_cell_edit(self, node: _GridNode, new_text: str, label: Optional[QLabel] = None, editor: Optional[QLineEdit] = None):
+        """Validates and commits inline cell edit."""
+        current_val = node.value or ""
+        if new_text == current_val:
+            self.cancel_cell_edit(label, editor)
+            return
+
+        session = getattr(self, "doc_session", None)
+        if session is not None and node.lxml_element is not None:
+            valid, err_msg = session.dry_run_text_update(node.lxml_element, new_text)
+            if not valid:
+                QMessageBox.warning(
+                    self,
+                    "Geçersiz Değer",
+                    f"Girilen değer XML formatına uygun değil:\n{err_msg}"
+                )
+                self.cancel_cell_edit(label, editor)
+                return
+
+        if not self._prepare_for_command_push():
+            self.cancel_cell_edit(label, editor)
+            return
+
+        cmd = SetNodeTextCommand(
+            node=node,
+            element=node.lxml_element,
+            old_text=node.lxml_element.text if node.lxml_element is not None else None,
+            new_text=new_text,
+            session=session,
+            grid_panel=self,
+            old_node_val=current_val,
+        )
+        if editor is not None:
+            editor.hide()
+            editor.setParent(None)
+            editor.deleteLater()
+
+        prev_count = self.grid_undo_stack.count()
+        self.grid_undo_stack.push(cmd)
+
+        if cmd._failed:
+            if getattr(cmd, "_critical_failure", False):
+                self.grid_undo_stack.clear()
+            elif prev_count == 0:
+                self.grid_undo_stack.clear()
+                self._undo_redo_blocked = False
+                self._history_error_message = ""
+            else:
+                self.lock_undo_redo(
+                    "Düğüm değeri güncellenirken serileştirme hatası oluştu ve değişiklik geri alındı. "
+                    "Geçmiş bütünlüğünü korumak için Grid Undo/Redo kilitlendi.",
+                    critical=False
+                )
+
+    def _check_element_matches_filter(self, elem: etree._Element, path: list[str], condition: str, value: str) -> bool:
+        """Helper to re-evaluate if an lxml element still matches the active filter criteria."""
+        if not path or not condition:
+            return True
+        try:
+            grid_res = _parse_xml_to_grid("", elem)
+            child_node = next((c for c in grid_res.children if getattr(c, "node_type", "element") != "comment"), None)
+            if child_node is None:
+                return True
+            if len(path) == 1 and _local_name(child_node) == path[0]:
+                return _check_condition(_get_node_text(child_node), condition, value)
+            subpath = path[1:] if len(path) > 1 and _local_name(child_node) == path[0] else path
+            return _check_node_matches_subpath(child_node, subpath, condition, value)
+        except Exception:
+            return True
+
+    def _on_node_text_updated(self, node: _GridNode, old_val: str, new_val: str):
+        """Handles state synchronization, filter re-evaluation, and UI refresh after a node edit."""
+        if self._active_filter_condition and self._active_filter_path and self._active_filtered_elements is not None:
+            for elem in self._active_filtered_elements:
+                matches = self._check_element_matches_filter(
+                    elem, self._active_filter_path, self._active_filter_condition, self._active_filter_value or ""
+                )
+                if not matches:
+                    self._out_of_filter_elements.add(elem)
+                else:
+                    self._out_of_filter_elements.discard(elem)
+
+            out_count = len(self._out_of_filter_elements)
+            if out_count > 0:
+                self.filter_status_label.setText(f"Filter: {self._active_filter_text} ({out_count} kayıt filtre kriteri dışına çıktı)")
+            else:
+                self.filter_status_label.setText(f"Filter: {self._active_filter_text}")
+
+        self._rebuild()
+        self.node_value_changed.emit(node, old_val, new_val)
+        self.document_modified.emit()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -949,6 +1756,17 @@ class XmlGridPanel(QWidget):
         self._demo_root = _parse_xml_to_grid(filepath, self._current_root)
         self._target_search_result = None
         self._target_widget = None
+        self.grid_undo_stack.clear()
+        self._undo_redo_blocked = False
+        self._history_error_message = ""
+        self.undo_available_changed.emit(False)
+        self.redo_available_changed.emit(False)
+        self._out_of_filter_elements.clear()
+        self._active_filter_text = ""
+        self._active_filter_path = None
+        self._active_filter_condition = None
+        self._active_filter_value = None
+        self._active_filtered_elements = None
         self.filter_status_widget.hide()
         self._rebuild()
 
@@ -1049,7 +1867,9 @@ class XmlGridPanel(QWidget):
         while self.content_layout.count():
             child = self.content_layout.takeAt(0)
             if child.widget():
-                child.widget().deleteLater()
+                w = child.widget()
+                w.setParent(None)
+                w.deleteLater()
                 
         # If the root is a hidden root with children, render children
         if self._demo_root.element == "" and self._demo_root.children:
@@ -1060,6 +1880,13 @@ class XmlGridPanel(QWidget):
 
     def apply_filter_results(self, matched_elements, filter_text: str, path: list[str] = None, condition: str = None, value: str = None):
         """Displays only the filtered elements and prunes non-matching sub-entities."""
+        self._active_filter_text = filter_text
+        self._active_filter_path = path
+        self._active_filter_condition = condition
+        self._active_filter_value = value
+        self._active_filtered_elements = list(matched_elements) if matched_elements else []
+        self._out_of_filter_elements.clear()
+
         self.filter_status_label.setText(f"Filter: {filter_text}")
         self.filter_status_widget.show()
         
@@ -1119,6 +1946,12 @@ class XmlGridPanel(QWidget):
 
     def clear_filter(self):
         """Removes the filter and restores original view."""
+        self._out_of_filter_elements.clear()
+        self._active_filter_text = ""
+        self._active_filter_path = None
+        self._active_filter_condition = None
+        self._active_filter_value = None
+        self._active_filtered_elements = None
         self.filter_status_widget.hide()
         if getattr(self, '_current_root', None) is not None:
             self._demo_root = _parse_xml_to_grid("", self._current_root)

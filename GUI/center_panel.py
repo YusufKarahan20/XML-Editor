@@ -66,6 +66,8 @@ class TextViewPanel(QWidget):
 class CenterPanel(QWidget):
     """Center panel holding Text View, Grid View, and Tree View tabs."""
     xml_content_changed = pyqtSignal(str)
+    grid_node_value_changed = pyqtSignal(object, str, str)
+    grid_document_modified = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -93,6 +95,8 @@ class CenterPanel(QWidget):
         self.text_view = TextViewPanel()
         self.text_view.xml_content_changed.connect(self.xml_content_changed.emit)
         self.grid_view = XmlGridPanel()
+        self.grid_view.node_value_changed.connect(self.grid_node_value_changed.emit)
+        self.grid_view.document_modified.connect(self._on_grid_document_modified)
         self.tree_view = XmlTreePanel()
         
         self.tabs.addTab(self.text_view, "Text View")
@@ -100,12 +104,24 @@ class CenterPanel(QWidget):
         self.tabs.addTab(self.tree_view, "Tree View")
         self.tabs.setCurrentWidget(self.grid_view)
         
+        self.doc_session = None
         self._active_search_result = None
         self._is_syncing_tab = False
         self._is_draft_valid = True
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
         layout.addWidget(self.tabs)
+
+    def _on_grid_document_modified(self):
+        """Eagerly updates Tree View model from live canonical dom_root on Grid modifications."""
+        if self.doc_session and self.doc_session.dom_root is not None:
+            self.tree_view.load_xml("", self.doc_session.dom_root)
+        self.grid_document_modified.emit()
+
+    def set_document_session(self, session):
+        """Pass canonical document session to CenterPanel and GridView."""
+        self.doc_session = session
+        self.grid_view.set_document_session(session)
 
     def set_draft_valid(self, is_valid: bool):
         """Update draft validity and refresh the sync warning banner."""

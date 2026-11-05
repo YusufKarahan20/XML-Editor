@@ -189,6 +189,37 @@ def extract_document_metadata(
 
     return True, version, encoding, standalone
 
+_NCNAME_START_CHAR = (
+    r'[A-Za-z_]'
+    r'|[\u00C0-\u00D6]|[\u00D8-\u00F6]|[\u00F8-\u02FF]'
+    r'|[\u0370-\u037D]|[\u037F-\u1FFF]'
+    r'|[\u200C-\u200D]|[\u2070-\u218F]|[\u2C00-\u2FEF]'
+    r'|[\u3001-\uD7FF]|[\uF900-\uFDCF]|[\uFDF0-\uFFFD]'
+    r'|[\U00010000-\U000EFFFF]'
+)
+_NCNAME_CHAR = (
+    _NCNAME_START_CHAR
+    + r'|[\-0-9\.]|\u00B7|[\u0300-\u036F]|[\u203F-\u2040]'
+)
+_NCNAME_REGEX = re.compile(rf'^(?:{_NCNAME_START_CHAR})(?:{_NCNAME_CHAR})*$', re.UNICODE)
+
+
+def is_valid_ncname(name: str) -> bool:
+    """
+    Validates whether name conforms to W3C XML 1.0 NCName specification.
+    Rejects names with colons, spaces, leading digits, or invalid characters.
+    Supports valid Unicode characters (e.g. Turkish, Cyrillic, etc.).
+    """
+    if not isinstance(name, str) or not name or ":" in name or " " in name:
+        return False
+    if not _NCNAME_REGEX.match(name):
+        return False
+    try:
+        etree.QName(name)
+        return True
+    except (ValueError, TypeError):
+        return False
+
 
 class XmlDocumentSession:
     """
@@ -495,6 +526,175 @@ class XmlDocumentSession:
         self.last_saved_text = self.raw_text_draft
         if target_path:
             self.file_path = Path(target_path)
+
+
+
+    def dry_run_text_update(self, element: etree._Element, new_text: str) -> tuple[bool, str]:
+        """
+        Validates whether setting element.text to new_text produces serializable, valid XML.
+        Does not mutate session draft, dirty state, or metadata.
+        Preserves original element.text (including None) exactly in a finally block.
+        Rejects XML 1.0 invalid control characters.
+        """
+        if self.dom_root is None:
+            return False, "Açık bir XML belgesi bulunmuyor."
+        if not self.is_draft_valid:
+            return False, "Geçersiz Text View taslağı varken düzenleme yapılamaz."
+        if element is None:
+            return False, "Geçersiz element düğümü."
+
+        # Validate XML 1.0 disallowed characters (C0 controls except \t, \n, \r)
+        if re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', new_text):
+            return False, "XML 1.0 tarafından izin verilmeyen kontrol karakterleri içeriyor."
+
+        old_text = element.text
+        try:
+            element.text = new_text
+            tree = self.dom_root.getroottree()
+            raw_bytes = etree.tostring(
+                tree,
+                encoding="utf-8",
+                xml_declaration=self.has_xml_declaration,
+                standalone=self.xml_standalone,
+                pretty_print=False,
+            )
+            # Verify parsed tree to guarantee well-formedness
+            verify_tree = etree.parse(io.BytesIO(raw_bytes))
+            if verify_tree.getroot() is None:
+                return False, "Geçersiz XML kök düğümü."
+            return True, ""
+        except Exception as e:
+            return False, f"XML serileştirme hatası: {e}"
+        finally:
+            element.text = old_text
+
+    def dry_run_rename_element(self, element: etree._Element, new_local_name: str) -> tuple[bool, str]:
+        """
+        Validates whether renaming element's local name to new_local_name produces serializable, valid XML.
+        Does not mutate session draft, dirty state, or metadata.
+        Preserves original element.tag exactly in a finally block.
+        """
+        if self.dom_root is None:
+            return False, "Açık bir XML belgesi bulunmuyor."
+        if not self.is_draft_valid:
+            return False, "Geçersiz Text View taslağı varken düzenleme yapılamaz."
+        if element is None:
+            return False, "Geçersiz element düğümü."
+
+        if not is_valid_ncname(new_local_name):
+            return False, "Geçersiz XML element adı. İki nokta (:) içeremez ve XML 1.0 NCName kurallarına uygun olmalıdır."
+
+        old_tag = element.tag
+        if old_tag.startswith("{"):
+            uri = old_tag[1:].split("}", 1)[0]
+            target_tag = f"{{{uri}}}{new_local_name}"
+        else:
+            target_tag = new_local_name
+
+        try:
+            element.tag = target_tag
+            tree = self.dom_root.getroottree()
+            raw_bytes = etree.tostring(
+                tree,
+                encoding="utf-8",
+                xml_declaration=self.has_xml_declaration,
+                standalone=self.xml_standalone,
+                pretty_print=False,
+            )
+            verify_tree = etree.parse(io.BytesIO(raw_bytes))
+            if verify_tree.getroot() is None:
+                return False, "Geçersiz XML kök düğümü."
+            return True, ""
+        except Exception as e:
+            return False, f"XML serileştirme hatası: {e}"
+        finally:
+            element.tag = old_tag
+
+    def dry_run_delete_element(self, element: etree._Element) -> tuple[bool, str]:
+        """
+        Validates whether deleting element produces serializable, valid XML.
+        Prohibits deletion of root element.
+        Does not mutate session draft, dirty state, or metadata.
+        Restores element, its tail, and preceding tail in a finally block.
+        """
+        if self.dom_root is None:
+            return False, "Açık bir XML belgesi bulunmuyor."
+        if not self.is_draft_valid:
+            return False, "Geçersiz Text View taslağı varken düzenleme yapılamaz."
+        if element is None:
+            return False, "Geçersiz element düğümü."
+        if element.getparent() is None:
+            return False, "Kök element silinemez."
+
+        parent = element.getparent()
+        index = parent.index(element)
+        element_tail = element.tail
+        prev_sibling = element.getprevious()
+        orig_prev_tail = prev_sibling.tail if prev_sibling is not None else parent.text
+
+        try:
+            if prev_sibling is not None:
+                prev_sibling.tail = (orig_prev_tail or "") + (element_tail or "")
+            else:
+                parent.text = (orig_prev_tail or "") + (element_tail or "")
+            parent.remove(element)
+
+            tree = self.dom_root.getroottree()
+            raw_bytes = etree.tostring(
+                tree,
+                encoding="utf-8",
+                xml_declaration=self.has_xml_declaration,
+                standalone=self.xml_standalone,
+                pretty_print=False,
+            )
+            verify_tree = etree.parse(io.BytesIO(raw_bytes))
+            if verify_tree.getroot() is None:
+                return False, "Geçersiz XML kök düğümü."
+            return True, ""
+        except Exception as e:
+            return False, f"XML serileştirme hatası: {e}"
+        finally:
+            parent.insert(index, element)
+            element.tail = element_tail
+            if prev_sibling is not None:
+                prev_sibling.tail = orig_prev_tail
+            else:
+                parent.text = orig_prev_tail
+
+    def update_from_dom(self) -> bool:
+        """
+        Serializes the canonical dom_root tree to raw_text_draft using pretty_print=False.
+        Preserves XML declaration and standalone metadata according to session contract.
+        Verifies serialized output before updating raw_text_draft.
+        Leaves raw_text_draft, dirty state, and session fields intact on failure.
+        Returns True on success, False on failure.
+        """
+        if self.dom_root is None or not self.is_draft_valid:
+            return False
+
+        try:
+            tree = self.dom_root.getroottree()
+            raw_bytes = etree.tostring(
+                tree,
+                encoding="utf-8",
+                xml_declaration=self.has_xml_declaration,
+                standalone=self.xml_standalone,
+                pretty_print=False,
+            )
+            # Verify parsed tree to guarantee well-formedness
+            verify_tree = etree.parse(io.BytesIO(raw_bytes))
+            if verify_tree.getroot() is None:
+                return False
+
+            new_text = raw_bytes.decode("utf-8")
+            new_text = new_text.replace("\r\n", "\n").replace("\r", "\n")
+
+            self.raw_text_draft = new_text
+            self.is_draft_valid = True
+            self.syntax_errors = []
+            return True
+        except Exception:
+            return False
 
     def reset(self):
         """Resets the session to initial unloaded state."""

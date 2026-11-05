@@ -59,6 +59,8 @@ class MainWindow(QMainWindow):
         self._create_central_area()
         self._create_status_bar()
         self.doc_session = XmlDocumentSession()
+        self.center_panel.set_document_session(self.doc_session)
+        self.center_panel.grid_node_value_changed.connect(self._on_grid_node_value_changed)
         self.current_xml_path = None
         self.current_xml_root = None
         self._last_valid_xml_text = ""
@@ -971,6 +973,9 @@ class MainWindow(QMainWindow):
         editor = self.center_panel.text_view.text_edit
         editor.undoAvailable.connect(self._on_undo_available_changed)
         editor.redoAvailable.connect(self._on_redo_available_changed)
+        self.center_panel.grid_view.undo_available_changed.connect(self._on_grid_undo_available_changed)
+        self.center_panel.grid_view.redo_available_changed.connect(self._on_grid_redo_available_changed)
+        self.center_panel.grid_document_modified.connect(self._on_grid_document_modified)
         self.center_panel.tabs.currentChanged.connect(self._update_undo_redo_actions)
         self._update_undo_redo_actions()
 
@@ -988,6 +993,20 @@ class MainWindow(QMainWindow):
             if action:
                 action.setEnabled(available)
 
+    def _on_grid_undo_available_changed(self, available: bool):
+        """Updates Undo action enabled state when Grid View is active."""
+        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.grid_view:
+            action = self._actions.get("edit_undo")
+            if action:
+                action.setEnabled(available)
+
+    def _on_grid_redo_available_changed(self, available: bool):
+        """Updates Redo action enabled state when Grid View is active."""
+        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.grid_view:
+            action = self._actions.get("edit_redo")
+            if action:
+                action.setEnabled(available)
+
     def _update_undo_redo_actions(self, *args):
         """Synchronizes Undo and Redo action states based on current tab and editor availability."""
         undo_action = self._actions.get("edit_undo")
@@ -995,23 +1014,58 @@ class MainWindow(QMainWindow):
         if not undo_action or not redo_action:
             return
 
-        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+        if not hasattr(self, "center_panel"):
+            undo_action.setEnabled(False)
+            redo_action.setEnabled(False)
+            return
+
+        current = self.center_panel.tabs.currentWidget()
+        if current == self.center_panel.text_view:
+            if getattr(self, "_needs_text_view_sync", False):
+                self.center_panel.text_view.set_xml_text(self.doc_session.raw_text_draft)
+                self._last_valid_xml_text = self.doc_session.raw_text_draft
+                self._needs_text_view_sync = False
             doc = self.center_panel.text_view.text_edit.document()
             undo_action.setEnabled(doc.isUndoAvailable())
             redo_action.setEnabled(doc.isRedoAvailable())
+        elif current == self.center_panel.grid_view:
+            undo_action.setEnabled(self.center_panel.grid_view.can_undo())
+            redo_action.setEnabled(self.center_panel.grid_view.can_redo())
         else:
             undo_action.setEnabled(False)
             redo_action.setEnabled(False)
 
     def _on_undo(self):
-        """Triggers undo in Text View if it is active."""
-        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+        """Triggers undo in the active view (Text View or Grid View)."""
+        if not hasattr(self, "center_panel"):
+            return
+        current = self.center_panel.tabs.currentWidget()
+        if current == self.center_panel.text_view:
             self.center_panel.text_view.text_edit.undo()
+        elif current == self.center_panel.grid_view:
+            self.center_panel.grid_view.undo()
 
     def _on_redo(self):
-        """Triggers redo in Text View if it is active."""
-        if hasattr(self, "center_panel") and self.center_panel.tabs.currentWidget() == self.center_panel.text_view:
+        """Triggers redo in the active view (Text View or Grid View)."""
+        if not hasattr(self, "center_panel"):
+            return
+        current = self.center_panel.tabs.currentWidget()
+        if current == self.center_panel.text_view:
             self.center_panel.text_view.text_edit.redo()
+        elif current == self.center_panel.grid_view:
+            self.center_panel.grid_view.redo()
+
+    def _on_grid_document_modified(self):
+        """Coordinates view sync, window dirty title, and search highlight clearing after grid mutations."""
+        self._needs_text_view_sync = True
+        self._last_valid_xml_text = self.doc_session.raw_text_draft
+        self._update_window_title()
+        self.center_panel.clear_search_highlight()
+        self._update_undo_redo_actions()
+
+    def _on_grid_node_value_changed(self, node, old_val: str, new_val: str):
+        """Handles grid cell edit: updates dirty state, window title, and clears search highlights."""
+        self._on_grid_document_modified()
 
     def _on_copy(self):
         """Copies selection from the focused widget or JSON preview."""
