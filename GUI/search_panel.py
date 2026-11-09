@@ -6,7 +6,7 @@ navigation, and a result count label.
 """
 
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox
+    QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox, QSizePolicy
 )
 from PyQt6.QtCore import pyqtSignal, QTimer
 
@@ -32,9 +32,10 @@ class SearchPanel(QWidget):
     # UI setup
     # ------------------------------------------------------------------
     def _setup_ui(self):
+        self.setMinimumWidth(500)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
 
         # Search icon label
         search_icon_label = QLabel("🔍")
@@ -44,8 +45,9 @@ class SearchPanel(QWidget):
         # Search input
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search XML...")
-        self.search_input.setMinimumWidth(220)
-        self.search_input.setMaximumWidth(360)
+        self.search_input.setMinimumWidth(180)
+        self.search_input.setMaximumWidth(320)
+        self.search_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.returnPressed.connect(self._on_search)
         self.search_input.textChanged.connect(self._on_text_changed)
@@ -59,13 +61,6 @@ class SearchPanel(QWidget):
         self.filter_combo.setToolTip("Filter by All, Element tags, or text Values")
         self.filter_combo.currentIndexChanged.connect(self._on_filter_mode_changed)
         layout.addWidget(self.filter_combo)
-
-        # Search button
-        self.btn_search = QPushButton("Search")
-        self.btn_search.setFixedWidth(70)
-        self.btn_search.clicked.connect(self._on_search)
-        self.btn_search.setToolTip("Search XML content")
-        layout.addWidget(self.btn_search)
 
         # Previous result
         self.btn_prev = QPushButton("◀")
@@ -83,6 +78,7 @@ class SearchPanel(QWidget):
 
         # Result count
         self.result_label = QLabel("0 matches")
+        self.result_label.setMinimumWidth(110)
         self.result_label.setStyleSheet(
             "color: #808080; font-size: 12px; padding: 0 6px; background: transparent;"
         )

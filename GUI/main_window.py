@@ -16,7 +16,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QToolBar, QStatusBar, QLabel, QFileDialog, QMessageBox,
-    QSizePolicy, QApplication,
+    QSizePolicy, QApplication, QToolButton, QMenu,
 )
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QCloseEvent
 from PyQt6.QtCore import Qt, QSize
@@ -148,12 +148,18 @@ class MainWindow(QMainWindow):
         json_action.setChecked(False)
 
         # ── Search ───────────────────────────────────────────────────
-        _action("search_find",  "Search XML…",    "Ctrl+F",       "Search within XML")
-        _action("search_next",  "Next Result",    "F3",           "Jump to next result")
-        _action("search_prev",  "Previous Result","Shift+F3",     "Jump to previous result")
+        _action("search_find",  "Search XML…",    "Ctrl+F",       "Search within XML",
+                slot=self._focus_search)
+        _action("search_next",  "Next Result",    "F3",           "Jump to next result",
+                slot=self._on_search_next)
+        _action("search_prev",  "Previous Result","Shift+F3",     "Jump to previous result",
+                slot=self._on_search_prev)
 
         # ── Filter ───────────────────────────────────────────────────
-        _action("filter_apply", "Filter Explorer",     None, "Toggle Filter Explorer", slot=self._toggle_filter_panel)
+        filter_action = _action("filter_apply", "Filter Explorer", None, "Toggle Filter Explorer",
+                                slot=self._toggle_filter_panel)
+        filter_action.setCheckable(True)
+        filter_action.setChecked(False)
         _action("filter_clear", "Clear Filter",   None, "Clear active filter", slot=self._on_filter_cleared)
 
         # ── Convert ──────────────────────────────────────────────────
@@ -166,6 +172,10 @@ class MainWindow(QMainWindow):
         _action("help_about", "About", None, "About XML Analyzer",
                 slot=self._show_about)
 
+        # Window-level shortcuts for all actions
+        for act in self._actions.values():
+            self.addAction(act)
+
     # ==================================================================
     #  MENU BAR
     # ==================================================================
@@ -173,79 +183,147 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
 
         # ── File ─────────────────────────────────────────────────────
-        file_menu = mb.addMenu("&File")
-        file_menu.addAction(self._actions["file_new"])
-        file_menu.addAction(self._actions["file_open"])
-        file_menu.addAction(self._actions["file_save"])
-        file_menu.addAction(self._actions["file_save_as"])
-        file_menu.addSeparator()
-        file_menu.addAction(self._actions["file_exit"])
+        self.file_menu = mb.addMenu("&File")
+        self.file_menu.addAction(self._actions["file_new"])
+        self.file_menu.addAction(self._actions["file_open"])
+        self.file_menu.addAction(self._actions["file_save"])
+        self.file_menu.addAction(self._actions["file_save_as"])
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self._actions["file_exit"])
 
         # ── Edit ─────────────────────────────────────────────────────
-        edit_menu = mb.addMenu("&Edit")
-        edit_menu.addAction(self._actions["edit_undo"])
-        edit_menu.addAction(self._actions["edit_redo"])
-        edit_menu.addSeparator()
-        edit_menu.addAction(self._actions["edit_copy"])
-        edit_menu.addAction(self._actions["edit_paste"])
-        edit_menu.addAction(self._actions["edit_select_all"])
-
-        # ── View ─────────────────────────────────────────────────────
-        view_menu = mb.addMenu("&View")
-        view_menu.addAction(self._actions["view_tree"])
-        view_menu.addAction(self._actions["view_grid"])
-        view_menu.addAction(self._actions["view_json"])
-
-        # ── Search ───────────────────────────────────────────────────
-        search_menu = mb.addMenu("&Search")
-        search_menu.addAction(self._actions["search_find"])
-        search_menu.addAction(self._actions["search_next"])
-        search_menu.addAction(self._actions["search_prev"])
+        self.edit_menu = mb.addMenu("&Edit")
+        self.edit_menu.addAction(self._actions["edit_undo"])
+        self.edit_menu.addAction(self._actions["edit_redo"])
+        self.edit_menu.addSeparator()
+        self.edit_menu.addAction(self._actions["edit_copy"])
+        self.edit_menu.addAction(self._actions["edit_paste"])
+        self.edit_menu.addAction(self._actions["edit_select_all"])
 
         # ── Filter ───────────────────────────────────────────────────
-        filter_menu = mb.addMenu("F&ilter")
-        filter_menu.addAction(self._actions["filter_apply"])
-        filter_menu.addAction(self._actions["filter_clear"])
+        self.filter_menu = mb.addMenu("F&ilter")
+        self.filter_menu.addAction(self._actions["filter_apply"])
+        self.filter_menu.addAction(self._actions["filter_clear"])
 
         # ── Convert ──────────────────────────────────────────────────
-        convert_menu = mb.addMenu("&Convert")
-        convert_menu.addAction(self._actions["convert_to_json"])
-        convert_menu.addAction(self._actions["convert_save_json"])
+        self.convert_menu = mb.addMenu("&Convert")
+        self.convert_menu.addAction(self._actions["convert_to_json"])
+        self.convert_menu.addAction(self._actions["convert_save_json"])
+        self.convert_menu.addAction(self._actions["view_json"])
 
         # ── Help ─────────────────────────────────────────────────────
-        help_menu = mb.addMenu("&Help")
-        help_menu.addAction(self._actions["help_about"])
+        self.help_menu = mb.addMenu("&Help")
+        self.help_menu.addAction(self._actions["help_about"])
+
+        # Popup styling for dropdown menus
+        menu_qss = """
+            QMenu {
+                background-color: #ffffff;
+                color: #1e1e1e;
+                border: 1px solid #c8c8c8;
+                border-radius: 4px;
+                padding: 4px 0;
+            }
+            QMenu::item {
+                background-color: transparent;
+                color: #1e1e1e;
+                padding: 6px 28px 6px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #e8e8e8;
+                color: #1e1e1e;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #d8d8d8;
+                margin: 4px 10px;
+            }
+        """
+        for m in (self.file_menu, self.edit_menu, self.filter_menu, self.convert_menu, self.help_menu):
+            m.setStyleSheet(menu_qss)
+
+        # Hide native menubar; toolbar header serves as the unified single-row control bar
+        mb.hide()
 
     # ==================================================================
     #  TOOLBAR
     # ==================================================================
     def _create_toolbar(self):
-        tb = QToolBar("Main Toolbar")
-        tb.setMovable(False)
-        tb.setIconSize(QSize(18, 18))
-        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.addToolBar(tb)
+        """Unified single-row header containing menus, search panel, and help."""
+        self.header_toolbar = self.addToolBar("Main Toolbar")
+        self.header_toolbar.setMovable(False)
+        self.header_toolbar.setFloatable(False)
+        self.header_toolbar.setObjectName("header_toolbar")
 
-        # Key actions
-        tb.addAction(self._actions["file_open"])
-        tb.addAction(self._actions["file_save"])
-        tb.addSeparator()
-        tb.addAction(self._actions["convert_to_json"])
-        tb.addAction(self._actions["filter_apply"])
-        tb.addSeparator()
+        btn_style = """
+            QToolButton {
+                background-color: transparent;
+                color: #1e1e1e;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QToolButton:hover {
+                background-color: #e0e0e0;
+                border-color: #d0d0d0;
+                color: #1e1e1e;
+            }
+            QToolButton:pressed, QToolButton:checked, QToolButton:open {
+                background-color: #d4d4d4;
+                border-color: #b0b0b0;
+                color: #1e1e1e;
+            }
+            QToolButton:focus {
+                outline: none;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+        """
 
-        # Embed the search panel
-        self.search_panel = SearchPanel()
+        def _make_menu_btn(text: str, menu: QMenu, tooltip: str = "") -> QToolButton:
+            btn = QToolButton(self.header_toolbar)
+            btn.setText(text)
+            btn.setToolTip(tooltip or text)
+            btn.setStyleSheet(btn_style)
+            btn.setMenu(menu)
+            btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            return btn
+
+        # ── Menus on the left ─────────────────────────────────────────
+        self.file_btn = _make_menu_btn("File", self.file_menu, "File operations")
+        self.header_toolbar.addWidget(self.file_btn)
+
+        self.edit_btn = _make_menu_btn("Edit", self.edit_menu, "Edit operations")
+        self.header_toolbar.addWidget(self.edit_btn)
+
+        self.filter_btn = _make_menu_btn("Filter", self.filter_menu, "Filter operations")
+        self.header_toolbar.addWidget(self.filter_btn)
+
+        self.convert_btn = _make_menu_btn("Convert", self.convert_menu, "Conversion operations")
+        self.header_toolbar.addWidget(self.convert_btn)
+
+        # ── Separator right after Convert ─────────────────────────────
+        self.header_toolbar.addSeparator()
+
+        # ── Search Panel directly next to Convert ─────────────────────
+        self.search_panel = SearchPanel(self.header_toolbar)
         self.search_panel.search_requested.connect(self._perform_search)
-        tb.addWidget(self.search_panel)
+        self.header_toolbar.addWidget(self.search_panel)
 
-        # Spacer to push view toggles to the right
-        spacer = QWidget()
+        # ── Expanding Spacer pushing Help to the far right ───────────
+        spacer = QWidget(self.header_toolbar)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        tb.addWidget(spacer)
+        spacer.setStyleSheet("background: transparent;")
+        self.header_toolbar.addWidget(spacer)
 
-        tb.addAction(self._actions["view_tree"])
-        tb.addAction(self._actions["view_grid"])
+        # ── Help button at the far right ──────────────────────────────
+        self.help_btn = _make_menu_btn("Help", self.help_menu, "Help and About")
+        self.header_toolbar.addWidget(self.help_btn)
 
     # ==================================================================
     #  CENTRAL AREA — three resizable panels
@@ -280,7 +358,7 @@ class MainWindow(QMainWindow):
         # Filter Panel (Filter Explorer on the left)
         self.filter_panel = FilterPanel()
         self.filter_panel.hide()
-        self.filter_panel.close_requested.connect(self.filter_panel.hide)
+        self.filter_panel.close_requested.connect(self._on_filter_panel_closed)
         self.filter_panel.filter_changed.connect(self._on_filter_changed)
         self.filter_panel.target_selected.connect(self._on_target_selected)
         self.filter_panel.filter_cleared.connect(self._on_filter_cleared)
@@ -746,17 +824,46 @@ class MainWindow(QMainWindow):
                 desired_panel_h = min(250, max(80, total_h // 4))
                 self.work_v_splitter.setSizes([total_h - desired_panel_h, desired_panel_h])
 
+    def _focus_search(self):
+        """Focuses the search input field and selects all text for immediate typing."""
+        if hasattr(self, "search_panel") and hasattr(self.search_panel, "search_input"):
+            self.search_panel.search_input.setFocus()
+            self.search_panel.search_input.selectAll()
+
+    def _on_search_next(self):
+        """Navigates to the next search match."""
+        if hasattr(self, "search_panel"):
+            self.search_panel._on_next_clicked()
+
+    def _on_search_prev(self):
+        """Navigates to the previous search match."""
+        if hasattr(self, "search_panel"):
+            self.search_panel._on_prev_clicked()
+
     # ==================================================================
     #  FILTER HANDLING
     # ==================================================================
-    def _toggle_filter_panel(self):
-        if self.filter_panel.isVisible():
-            self.filter_panel.hide()
+    def _toggle_filter_panel(self, checked: bool = None):
+        if checked is None:
+            new_state = not self.filter_panel.isVisible()
         else:
-            self.filter_panel.show()
+            new_state = checked
+        self.filter_panel.setVisible(new_state)
+        action = self.get_action("filter_apply")
+        if action and action.isChecked() != new_state:
+            action.setChecked(new_state)
 
     def _show_filter_panel(self):
         self.filter_panel.show()
+        action = self.get_action("filter_apply")
+        if action and not action.isChecked():
+            action.setChecked(True)
+
+    def _on_filter_panel_closed(self):
+        self.filter_panel.hide()
+        action = self.get_action("filter_apply")
+        if action and action.isChecked():
+            action.setChecked(False)
 
     def _on_filter_changed(self, target: str, path: list[str], condition: str = "", value: str = ""):
         if self.current_xml_root is None:
