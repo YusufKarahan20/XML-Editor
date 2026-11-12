@@ -25,44 +25,28 @@ class SearchResultsPanel(QWidget):
         layout.setSpacing(0)
         
         # Header
-        header = QWidget()
-        header.setStyleSheet("background: #f0f0f0; border-top: 1px solid #ccc; border-bottom: 1px solid #ccc;")
-        header_layout = QHBoxLayout(header)
+        self.header = QWidget()
+        header_layout = QHBoxLayout(self.header)
         header_layout.setContentsMargins(8, 4, 8, 4)
         
-        title = QLabel("Search Results")
-        title.setStyleSheet("font-weight: bold; border: none; background: transparent;")
+        self.title = QLabel("Search Results")
         
         self.close_btn = QPushButton("×")
         self.close_btn.setFixedSize(20, 20)
         self.close_btn.setToolTip("Close Results")
-        self.close_btn.setStyleSheet("border: none; font-weight: bold; font-size: 16px; background: transparent;")
         self.close_btn.clicked.connect(self.close_requested.emit)
         
-        header_layout.addWidget(title)
+        header_layout.addWidget(self.title)
         header_layout.addStretch()
         header_layout.addWidget(self.close_btn)
         
         # List widget
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet("""
-            QListWidget {
-                border: none;
-                background: white;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-bottom: 1px solid #eee;
-            }
-            QListWidget::item:selected {
-                background: #e0f0ff;
-                color: black;
-            }
-        """)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
         
-        layout.addWidget(header)
+        layout.addWidget(self.header)
         layout.addWidget(self.list_widget)
+        self.refresh_theme("light")
 
     def _navigate_to_row(self, row: int):
         self.list_widget.setCurrentRow(row)
@@ -119,3 +103,30 @@ class SearchResultsPanel(QWidget):
         else:
             new_row = 0
         self._navigate_to_row(new_row)
+
+    def refresh_theme(self, theme_name: str):
+        """Updates search results panel colors from PALETTE."""
+        from GUI.theme_manager import PALETTE
+        pal = PALETTE.get(theme_name.lower(), PALETTE["light"])
+        self.header.setStyleSheet(f"background: {pal['header_bg']}; border-top: 1px solid {pal['border_default']}; border-bottom: 1px solid {pal['border_default']};")
+        self.title.setStyleSheet(f"font-weight: bold; border: none; background: transparent; color: {pal['text_primary']};")
+        self.close_btn.setStyleSheet(f"border: none; font-weight: bold; font-size: 16px; background: transparent; color: {pal['text_muted']};")
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{
+                border: none;
+                background: {pal['panel_base']};
+                color: {pal['text_primary']};
+            }}
+            QListWidget::item {{
+                padding: 8px;
+                border-bottom: 1px solid {pal['border_muted']};
+                color: {pal['text_primary']};
+            }}
+            QListWidget::item:selected {{
+                background: {pal['selection_bg']};
+                color: {pal['selection_fg']};
+            }}
+            QListWidget::item:hover:!selected {{
+                background: {pal['toolbar_btn_hover']};
+            }}
+        """)

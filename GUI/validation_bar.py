@@ -38,46 +38,9 @@ class ValidationBar(QFrame):
     def _setup_ui(self):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet("""
-            QFrame#validationBar {
-                background-color: #fdf2f2;
-                border-top: 1px solid #f5c6cb;
-                border-bottom: 1px solid #f5c6cb;
-                padding: 0 4px;
-            }
             QLabel {
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 font-size: 11px;
-            }
-            QLabel#badge {
-                background-color: #dc3545;
-                color: #ffffff;
-                font-weight: bold;
-                border-radius: 3px;
-                padding: 2px 6px;
-            }
-            QLabel#location {
-                color: #721c24;
-                font-weight: bold;
-                padding-left: 4px;
-            }
-            QLabel#msg {
-                color: #491217;
-                padding-left: 4px;
-            }
-            QPushButton.jumpBtn {
-                background-color: #ffffff;
-                color: #721c24;
-                border: 1px solid #dc3545;
-                border-radius: 3px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: 600;
-            }
-            QPushButton.jumpBtn:hover {
-                background-color: #f8d7da;
-            }
-            QPushButton.jumpBtn:pressed {
-                background-color: #f1b0b7;
             }
             QScrollArea#errorScrollArea {
                 background: transparent;
@@ -194,12 +157,12 @@ class ValidationBar(QFrame):
                 row_layout.setSpacing(6)
 
                 loc_lbl = QLabel(f"Satır {max(1, err.line)}:")
-                loc_lbl.setStyleSheet("color: #721c24; font-weight: bold;")
+                loc_lbl.setObjectName("location")
                 row_layout.addWidget(loc_lbl)
 
                 err_msg = err.message.strip() if err.message else "Geçersiz XML sözdizimi."
                 msg_lbl = QLabel(err_msg)
-                msg_lbl.setStyleSheet("color: #491217;")
+                msg_lbl.setObjectName("msg")
                 msg_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
                 msg_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 msg_lbl.setToolTip(err_msg)
@@ -207,20 +170,6 @@ class ValidationBar(QFrame):
 
                 btn = QPushButton(" Hataya Git")
                 btn.setProperty("class", "jumpBtn")
-                btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #ffffff;
-                        color: #721c24;
-                        border: 1px solid #dc3545;
-                        border-radius: 3px;
-                        padding: 1px 8px;
-                        font-size: 10px;
-                        font-weight: 600;
-                    }
-                    QPushButton:hover {
-                        background-color: #f8d7da;
-                    }
-                """)
                 btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                 btn.clicked.connect(lambda _, l=err.line, c=err.column: self.navigate_requested.emit(l, c))
                 row_layout.addWidget(btn)
@@ -271,3 +220,9 @@ class ValidationBar(QFrame):
         if self.single_container.isVisible() and event.button() == Qt.MouseButton.LeftButton:
             self._on_jump_clicked()
         super().mousePressEvent(event)
+
+    def refresh_theme(self, theme_name: str):
+        """Refreshes validation bar styling on theme change."""
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()

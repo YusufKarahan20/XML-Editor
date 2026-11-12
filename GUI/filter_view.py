@@ -10,9 +10,10 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QComboBox, QPushButton, QFrame,
     QScrollArea, QSizePolicy
 )
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QSize
 
 from FILTER.engine import get_targets, get_next_level, get_values_for_path
+from GUI.icon_provider import IconProvider
 
 class FilterPanel(QWidget):
     """
@@ -45,25 +46,27 @@ class FilterPanel(QWidget):
         main_layout.setSpacing(0)
 
         # Header bar
-        header_frame = QFrame()
-        header_frame.setStyleSheet("background: #e4e4e4; border-bottom: 1px solid #c8c8c8; padding: 4px;")
-        header_layout = QHBoxLayout(header_frame)
+        self.header_frame = QFrame()
+        self.header_frame.setStyleSheet("background: #e4e4e4; border-bottom: 1px solid #c8c8c8; padding: 4px;")
+        header_layout = QHBoxLayout(self.header_frame)
         header_layout.setContentsMargins(8, 4, 8, 4)
 
-        title = QLabel("<b>Filter Explorer</b>")
-        title.setStyleSheet("font-size: 13px; color: #1e1e1e;")
-        header_layout.addWidget(title)
+        self.title = QLabel("<b>Filter Explorer</b>")
+        self.title.setStyleSheet("font-size: 13px; color: #1e1e1e;")
+        header_layout.addWidget(self.title)
 
         header_layout.addStretch()
 
-        btn_close = QPushButton("✕")
-        btn_close.setFixedSize(22, 22)
-        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_close.setStyleSheet("QPushButton { border: none; font-weight: bold; color: #555; } QPushButton:hover { color: #d9534f; }")
-        btn_close.clicked.connect(self.close_requested.emit)
-        header_layout.addWidget(btn_close)
+        self.btn_close = QPushButton()
+        self.btn_close.setIcon(IconProvider.get_icon("x", color="#555555"))
+        self.btn_close.setIconSize(QSize(14, 14))
+        self.btn_close.setFixedSize(22, 22)
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_close.setStyleSheet("QPushButton { border: none; } QPushButton:hover { background-color: #d0d0d0; border-radius: 3px; }")
+        self.btn_close.clicked.connect(self.close_requested.emit)
+        header_layout.addWidget(self.btn_close)
 
-        main_layout.addWidget(header_frame)
+        main_layout.addWidget(self.header_frame)
 
         # Scrollable container for dynamic controls
         scroll_area = QScrollArea()
@@ -78,18 +81,18 @@ class FilterPanel(QWidget):
         self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # ── 1. Target Section ─────────────────────────────────────────
-        lbl_target_header = QLabel("TARGET (LISTE)")
-        lbl_target_header.setStyleSheet("font-weight: bold; color: #666; font-size: 11px;")
-        self.content_layout.addWidget(lbl_target_header)
+        self.lbl_target_header = QLabel("TARGET (LISTE)")
+        self.lbl_target_header.setStyleSheet("font-weight: bold; color: #666; font-size: 11px;")
+        self.content_layout.addWidget(self.lbl_target_header)
 
         self.combo_target = QComboBox()
         self.combo_target.currentIndexChanged.connect(self._on_target_changed)
         self.content_layout.addWidget(self.combo_target)
 
         # ── 2. Field (Path) Section ──────────────────────────────────
-        lbl_field_header = QLabel("FIELD (ALAN SEÇİMİ)")
-        lbl_field_header.setStyleSheet("font-weight: bold; color: #666; font-size: 11px; margin-top: 4px;")
-        self.content_layout.addWidget(lbl_field_header)
+        self.lbl_field_header = QLabel("FIELD (ALAN SEÇİMİ)")
+        self.lbl_field_header.setStyleSheet("font-weight: bold; color: #666; font-size: 11px; margin-top: 4px;")
+        self.content_layout.addWidget(self.lbl_field_header)
 
         self.path_container = QWidget()
         self.path_layout = QVBoxLayout(self.path_container)
@@ -104,13 +107,13 @@ class FilterPanel(QWidget):
         cond_layout.setContentsMargins(8, 8, 8, 8)
         cond_layout.setSpacing(8)
 
-        lbl_cond_header = QLabel("KOŞUL & DEĞER (İSTEĞE BAĞLI)")
-        lbl_cond_header.setStyleSheet("font-weight: bold; color: #666; font-size: 11px; border: none; background: transparent;")
-        cond_layout.addWidget(lbl_cond_header)
+        self.lbl_cond_header = QLabel("KOŞUL & DEĞER (İSTEĞE BAĞLI)")
+        self.lbl_cond_header.setStyleSheet("font-weight: bold; color: #666; font-size: 11px; border: none; background: transparent;")
+        cond_layout.addWidget(self.lbl_cond_header)
 
-        lbl_cond = QLabel("Condition:")
-        lbl_cond.setStyleSheet("color: #444; font-size: 11px; border: none; background: transparent;")
-        cond_layout.addWidget(lbl_cond)
+        self.lbl_cond = QLabel("Condition:")
+        self.lbl_cond.setStyleSheet("color: #444; font-size: 11px; border: none; background: transparent;")
+        cond_layout.addWidget(self.lbl_cond)
 
         self.combo_condition = QComboBox()
         self.combo_condition.addItems([
@@ -119,9 +122,9 @@ class FilterPanel(QWidget):
         self.combo_condition.currentIndexChanged.connect(self._on_condition_changed)
         cond_layout.addWidget(self.combo_condition)
 
-        lbl_val = QLabel("Value:")
-        lbl_val.setStyleSheet("color: #444; font-size: 11px; border: none; background: transparent;")
-        cond_layout.addWidget(lbl_val)
+        self.lbl_val = QLabel("Value:")
+        self.lbl_val.setStyleSheet("color: #444; font-size: 11px; border: none; background: transparent;")
+        cond_layout.addWidget(self.lbl_val)
 
         self.combo_value = QComboBox()
         self.combo_value.currentIndexChanged.connect(self._on_value_changed)
@@ -132,6 +135,8 @@ class FilterPanel(QWidget):
 
         # ── 4. Action Buttons ─────────────────────────────────────────
         self.btn_clear = QPushButton("Clear Filter")
+        self.btn_clear.setIcon(IconProvider.get_icon("filter-x"))
+        self.btn_clear.setIconSize(QSize(16, 16))
         self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear.setStyleSheet("QPushButton { padding: 6px 12px; font-weight: bold; background: #e0e0e0; border: 1px solid #b8b8b8; border-radius: 3px; } QPushButton:hover { background: #d0d0d0; }")
         self.btn_clear.clicked.connect(self._on_clear_clicked)
@@ -382,8 +387,8 @@ class FilterPanel(QWidget):
         self.filter_changed.emit(target, path, condition, value)
         self.filter_applied.emit(target, path, condition, value)
 
-    def _on_clear_clicked(self):
-        """Clears all selections and restores original view."""
+    def reset_filter(self):
+        """Clears all selections and resets controls to initial empty state without emitting filter_cleared."""
         self._updating = True
         self.combo_target.blockSignals(True)
         self.combo_target.setCurrentIndex(0)
@@ -393,6 +398,26 @@ class FilterPanel(QWidget):
         self._reset_condition()
         self._updating = False
 
+    def _on_clear_clicked(self):
+        """Clears all selections and restores original view."""
+        self.reset_filter()
         self.filter_cleared.emit()
+
+    def refresh_theme(self, theme_name: str):
+        """Updates filter panel styling and icons from PALETTE."""
+        from GUI.theme_manager import PALETTE
+        pal = PALETTE.get(theme_name.lower(), PALETTE["light"])
+        self.header_frame.setStyleSheet(f"background: {pal['header_bg']}; border-bottom: 1px solid {pal['border_default']}; padding: 4px;")
+        self.title.setStyleSheet(f"font-size: 13px; color: {pal['text_primary']};")
+        self.btn_close.setIcon(IconProvider.get_icon("x", color=pal["icon_muted"]))
+        self.btn_close.setStyleSheet(f"QPushButton {{ border: none; }} QPushButton:hover {{ background-color: {pal['toolbar_btn_hover']}; border-radius: 3px; }}")
+        self.lbl_target_header.setStyleSheet(f"font-weight: bold; color: {pal['text_muted']}; font-size: 11px;")
+        self.lbl_field_header.setStyleSheet(f"font-weight: bold; color: {pal['text_muted']}; font-size: 11px; margin-top: 4px;")
+        self.cond_frame.setStyleSheet(f"QFrame {{ background: {pal['filter_cond_bg']}; border: 1px solid {pal['filter_cond_border']}; border-radius: 4px; padding: 6px; }}")
+        self.lbl_cond_header.setStyleSheet(f"font-weight: bold; color: {pal['text_muted']}; font-size: 11px; border: none; background: transparent;")
+        self.lbl_cond.setStyleSheet(f"color: {pal['text_secondary']}; font-size: 11px; border: none; background: transparent;")
+        self.lbl_val.setStyleSheet(f"color: {pal['text_secondary']}; font-size: 11px; border: none; background: transparent;")
+        self.btn_clear.setIcon(IconProvider.get_icon("filter-x"))
+        self.btn_clear.setStyleSheet(f"QPushButton {{ padding: 6px 12px; font-weight: bold; background: {pal['toolbar_btn_hover']}; border: 1px solid {pal['border_default']}; border-radius: 3px; color: {pal['text_primary']}; }} QPushButton:hover {{ background: {pal['toolbar_btn_pressed']}; }}")
 
 

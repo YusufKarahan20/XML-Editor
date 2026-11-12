@@ -8,7 +8,8 @@ navigation, and a result count label.
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox, QSizePolicy
 )
-from PyQt6.QtCore import pyqtSignal, QTimer
+from PyQt6.QtCore import pyqtSignal, QTimer, QSize
+from GUI.icon_provider import IconProvider
 
 
 class SearchPanel(QWidget):
@@ -38,9 +39,12 @@ class SearchPanel(QWidget):
         layout.setSpacing(6)
 
         # Search icon label
-        search_icon_label = QLabel("🔍")
-        search_icon_label.setStyleSheet("font-size: 14px; padding: 0 2px; background: transparent;")
-        layout.addWidget(search_icon_label)
+        self.search_icon_label = QLabel()
+        self.search_icon_label.setPixmap(
+            IconProvider.get_pixmap("search", size=16, color="#606060", widget=self)
+        )
+        self.search_icon_label.setStyleSheet("padding: 0 2px; background: transparent;")
+        layout.addWidget(self.search_icon_label)
 
         # Search input
         self.search_input = QLineEdit()
@@ -48,7 +52,12 @@ class SearchPanel(QWidget):
         self.search_input.setMinimumWidth(180)
         self.search_input.setMaximumWidth(320)
         self.search_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.search_input.setClearButtonEnabled(True)
+        self.clear_action = self.search_input.addAction(
+            IconProvider.get_icon("x", color="#707070", sizes=(14, 16)),
+            QLineEdit.ActionPosition.TrailingPosition,
+        )
+        self.clear_action.setVisible(False)
+        self.clear_action.triggered.connect(self.search_input.clear)
         self.search_input.returnPressed.connect(self._on_search)
         self.search_input.textChanged.connect(self._on_text_changed)
         self.search_input.installEventFilter(self)
@@ -63,14 +72,18 @@ class SearchPanel(QWidget):
         layout.addWidget(self.filter_combo)
 
         # Previous result
-        self.btn_prev = QPushButton("◀")
+        self.btn_prev = QPushButton()
+        self.btn_prev.setIcon(IconProvider.get_icon("chevron-left"))
+        self.btn_prev.setIconSize(QSize(16, 16))
         self.btn_prev.setFixedWidth(32)
         self.btn_prev.setToolTip("Previous result")
         self.btn_prev.clicked.connect(self._on_prev_clicked)
         layout.addWidget(self.btn_prev)
 
         # Next result
-        self.btn_next = QPushButton("▶")
+        self.btn_next = QPushButton()
+        self.btn_next.setIcon(IconProvider.get_icon("chevron-right"))
+        self.btn_next.setIconSize(QSize(16, 16))
         self.btn_next.setFixedWidth(32)
         self.btn_next.setToolTip("Next result")
         self.btn_next.clicked.connect(self._on_next_clicked)
@@ -128,6 +141,7 @@ class SearchPanel(QWidget):
         self._debounce_timer.stop()
         self._last_emitted_query = ""
         self.search_input.clear()
+        self.clear_action.setVisible(False)
         self.filter_combo.blockSignals(True)
         self.filter_combo.setCurrentIndex(0)
         self.filter_combo.blockSignals(False)
@@ -151,6 +165,7 @@ class SearchPanel(QWidget):
             self.search_requested.emit(query)
 
     def _on_text_changed(self, text: str):
+        self.clear_action.setVisible(bool(text))
         stripped = text.strip()
         if not stripped:
             self._debounce_timer.stop()
@@ -174,3 +189,22 @@ class SearchPanel(QWidget):
 
     def _on_next_clicked(self):
         self.next_requested.emit()
+
+    def refresh_theme(self, theme_name: str):
+        """Updates search panel icons and label styling for active theme."""
+        from GUI.theme_manager import PALETTE
+        pal = PALETTE.get(theme_name.lower(), PALETTE["light"])
+        if hasattr(self, "search_icon_label"):
+            self.search_icon_label.setPixmap(
+                IconProvider.get_pixmap("search", size=16, color=pal["icon_muted"], widget=self)
+            )
+        if hasattr(self, "clear_action"):
+            self.clear_action.setIcon(IconProvider.get_icon("x", color=pal["icon_subtle"], sizes=(14, 16)))
+        if hasattr(self, "btn_prev"):
+            self.btn_prev.setIcon(IconProvider.get_icon("chevron-left"))
+        if hasattr(self, "btn_next"):
+            self.btn_next.setIcon(IconProvider.get_icon("chevron-right"))
+        if hasattr(self, "result_label"):
+            self.result_label.setStyleSheet(
+                f"color: {pal['text_secondary']}; font-size: 12px; padding: 0 6px; background: transparent;"
+            )

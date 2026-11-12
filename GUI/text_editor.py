@@ -91,19 +91,23 @@ class XmlHighlighter(QSyntaxHighlighter):
         super().__init__(document)
         
         self.fmt_tag = QTextCharFormat()
-        self.fmt_tag.setForeground(QColor("#0000FF")) # Blue tags
-        
         self.fmt_attr_name = QTextCharFormat()
-        self.fmt_attr_name.setForeground(QColor("#800080")) # Purple attribute name/key
-        
         self.fmt_attr_val = QTextCharFormat()
-        self.fmt_attr_val.setForeground(QColor("#FF0000")) # Red attribute value
-        
         self.fmt_comment = QTextCharFormat()
-        self.fmt_comment.setForeground(QColor("#008000")) # Green comments
-        
         self.fmt_decl = QTextCharFormat()
-        self.fmt_decl.setForeground(QColor("#808080")) # Gray decl
+        
+        self.apply_theme("light")
+
+    def apply_theme(self, theme_name: str):
+        """Updates syntax highlighting colors from ThemeManager PALETTE."""
+        from GUI.theme_manager import PALETTE
+        pal = PALETTE.get(theme_name.lower(), PALETTE["light"])
+        self.fmt_tag.setForeground(QColor(pal["editor_syntax_tag"]))
+        self.fmt_attr_name.setForeground(QColor(pal["editor_syntax_attr_name"]))
+        self.fmt_attr_val.setForeground(QColor(pal["editor_syntax_attr_val"]))
+        self.fmt_comment.setForeground(QColor(pal["editor_syntax_comment"]))
+        self.fmt_decl.setForeground(QColor(pal["editor_syntax_decl"]))
+        self.rehighlight()
 
     def highlightBlock(self, text):
         # 1. Tags (<...>) and Attributes inside them
@@ -192,6 +196,17 @@ class XmlTextEditor(QPlainTextEdit):
         self.fold_nodes = []
         self.line_to_node = {}
 
+        # Theme and palette tokens
+        self._current_theme = "light"
+        self._gutter_bg = QColor("#f0f0f0")
+        self._gutter_border = QColor("#d0d0d0")
+        self._gutter_text = QColor("#888888")
+        self._fold_border = QColor("#666666")
+        self._fold_bg = QColor("#ffffff")
+        self._current_line_bg = QColor("#fffde7")
+        self._search_match_bg = QColor("#ffe082")
+        self._error_line_bg = QColor("#fce4ec")
+
         # Debounce timer for user typing / pasting
         self._is_programmatic_change = False
         self._debounce_timer = QTimer(self)
@@ -259,7 +274,7 @@ class XmlTextEditor(QPlainTextEdit):
         
     def line_number_area_paint_event(self, event):
         painter = QPainter(self.line_number_area)
-        painter.fillRect(event.rect(), QColor("#f0f0f0"))
+        painter.fillRect(event.rect(), self._gutter_bg)
         
         block = self.firstVisibleBlock()
         blockNumber = block.blockNumber()
@@ -268,7 +283,7 @@ class XmlTextEditor(QPlainTextEdit):
         bottom = top + round(self.blockBoundingRect(block).height())
         
         # Right border line
-        painter.setPen(QColor("#d0d0d0"))
+        painter.setPen(self._gutter_border)
         painter.drawLine(self.line_number_area.width() - 1, 0, self.line_number_area.width() - 1, self.line_number_area.height())
         
         fm = self.fontMetrics()
@@ -278,7 +293,7 @@ class XmlTextEditor(QPlainTextEdit):
                 
                 # Draw Line Number
                 number = str(blockNumber + 1)
-                painter.setPen(QColor("#888888"))
+                painter.setPen(self._gutter_text)
                 painter.drawText(0, top, self.line_number_area.width() - 25, fm.height(),
                                  Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, number)
                 
@@ -289,8 +304,8 @@ class XmlTextEditor(QPlainTextEdit):
                     x = self.line_number_area.width() - 17
                     y = top + (fm.height() - icon_size) // 2
                     
-                    painter.setPen(QColor("#666666"))
-                    painter.setBrush(QColor("#ffffff"))
+                    painter.setPen(self._fold_border)
+                    painter.setBrush(self._fold_bg)
                     painter.drawRect(x, y, icon_size, icon_size)
                     
                     # Horizontal line for minus
@@ -304,6 +319,25 @@ class XmlTextEditor(QPlainTextEdit):
             top = bottom
             bottom = top + round(self.blockBoundingRect(block).height())
             blockNumber += 1
+
+    def refresh_theme(self, theme_name: str):
+        """Updates editor colors from ThemeManager PALETTE without touching content or undo history."""
+        from GUI.theme_manager import PALETTE
+        self._current_theme = theme_name.lower()
+        pal = PALETTE.get(self._current_theme, PALETTE["light"])
+        self.highlighter.apply_theme(self._current_theme)
+
+        self._gutter_bg = QColor(pal["editor_gutter_bg"])
+        self._gutter_border = QColor(pal["editor_gutter_border"])
+        self._gutter_text = QColor(pal["editor_gutter_text"])
+        self._fold_border = QColor(pal["border_muted"] if self._current_theme == "dark" else "#666666")
+        self._fold_bg = QColor(pal["panel_base"] if self._current_theme == "dark" else "#ffffff")
+        self._current_line_bg = QColor(pal["editor_current_line"])
+        self._search_match_bg = QColor(pal["editor_search_match"])
+        self._error_line_bg = QColor(pal["val_bg"])
+
+        self.line_number_area.update()
+        self.viewport().update()
             
     def line_number_area_mouse_press_event(self, event):
         y = event.position().y()
@@ -464,7 +498,7 @@ class XmlTextEditor(QPlainTextEdit):
         line_cursor = QTextCursor(block)
         line_cursor.clearSelection()
         line_sel.cursor = line_cursor
-        line_sel.format.setBackground(QColor("#fffde7"))
+        line_sel.format.setBackground(self._current_line_bg)
         line_sel.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
         selections.append(line_sel)
 
@@ -475,8 +509,8 @@ class XmlTextEditor(QPlainTextEdit):
             text_cursor.setPosition(block.position() + start_char)
             text_cursor.setPosition(block.position() + start_char + match_len, QTextCursor.MoveMode.KeepAnchor)
             text_sel.cursor = text_cursor
-            text_sel.format.setBackground(QColor("#ffe082"))
-            text_sel.format.setForeground(QColor("#000000"))
+            text_sel.format.setBackground(self._search_match_bg)
+            text_sel.format.setForeground(QColor("#ffffff" if self._current_theme == "dark" else "#000000"))
             selections.append(text_sel)
             self.setTextCursor(text_cursor)
         else:
@@ -520,7 +554,7 @@ class XmlTextEditor(QPlainTextEdit):
         error_sel = QTextEdit.ExtraSelection()
         error_sel.cursor = QTextCursor(block)
         error_sel.cursor.clearSelection()
-        error_sel.format.setBackground(QColor("#fce4ec"))
+        error_sel.format.setBackground(self._error_line_bg)
         error_sel.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
         self.setExtraSelections([error_sel])
 

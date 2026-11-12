@@ -12,6 +12,7 @@ All QActions are wired as stubs so functionality can be connected later.
 
 import os
 from pathlib import Path
+from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
@@ -19,10 +20,12 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QApplication, QToolButton, QMenu,
 )
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QCloseEvent
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QSettings, QEvent, QObject
 from lxml import etree
 from XML.document_session import XmlDocumentSession
 from GUI.center_panel import CenterPanel
+from GUI.icon_provider import IconProvider
+from GUI.theme_manager import ThemeManager, PALETTE
 from SEARCH.engine import search_xml
 from GUI.json_preview import JsonPreviewPanel
 from GUI.search_panel import SearchPanel
@@ -32,6 +35,60 @@ from FILTER.engine import apply_filter
 from CONVERTER.xml_to_json import ConversionConfig, xml_to_json
 from CONVERTER.heuristics import build_smart_array_detector
 from CONVERTER.soap import is_soap_envelope, is_service_payload, soap_to_json, build_soap_array_detector
+
+
+def _normalize_path(filepath: str) -> str:
+    """Standardizes path on Windows for case-insensitive and slash-agnostic comparison."""
+    if not filepath or not str(filepath).strip():
+        return ""
+    return os.path.normcase(os.path.abspath(os.path.normpath(str(filepath).strip())))
+
+
+class _FileDropEventFilter(QObject):
+    """Application-level event filter for secure, global XML drag & drop handling."""
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window
+
+    def _get_valid_local_xml_files(self, mime_data) -> list[str]:
+        valid_files = []
+        if not mime_data or not mime_data.hasUrls():
+            return valid_files
+
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            local_path = url.toLocalFile()
+            if not local_path or not local_path.strip():
+                continue
+            clean_path = os.path.abspath(os.path.normpath(local_path.strip()))
+            if not os.path.isfile(clean_path):
+                continue
+            if not clean_path.lower().endswith((".xml", ".txt")):
+                continue
+            valid_files.append(clean_path)
+        return valid_files
+
+    def eventFilter(self, watched, event):
+        if isinstance(watched, QWidget) and watched.window() == self.main_window:
+            if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                if event.mimeData() and event.mimeData().hasUrls():
+                    valid_xmls = self._get_valid_local_xml_files(event.mimeData())
+                    if valid_xmls:
+                        event.acceptProposedAction()
+                    else:
+                        event.ignore()
+                    return True
+            elif event.type() == QEvent.Type.Drop:
+                if event.mimeData() and event.mimeData().hasUrls():
+                    valid_xmls = self._get_valid_local_xml_files(event.mimeData())
+                    if valid_xmls:
+                        event.acceptProposedAction()
+                        self.main_window.open_document(valid_xmls[0])
+                    else:
+                        event.ignore()
+                    return True
+        return super().eventFilter(watched, event)
 
 
 class MainWindow(QMainWindow):
@@ -46,11 +103,16 @@ class MainWindow(QMainWindow):
         self.resize(*self.DEFAULT_SIZE)
         self.setMinimumSize(800, 500)
 
-        # ── Load stylesheet ──────────────────────────────────────────
-        self._load_stylesheet()
+        # ── Initialize ThemeManager and apply saved theme ─────────────
+        self.theme_manager = ThemeManager(self)
+        initial_theme = self.theme_manager.get_saved_theme()
+        self.theme_manager.apply_theme(initial_theme, save_preference=False, force=True)
+        self.theme_manager.theme_changed.connect(self._on_theme_changed)
 
-        # ── Actions (must be created before menus & toolbars) ────────
+        # ── Actions & Settings (must be created before menus & toolbars) ──
         self._actions: dict[str, QAction] = {}
+        self._recent_files: list[str] = []
+        self._load_recent_files()
         self._create_actions()
 
         # ── UI assembly ──────────────────────────────────────────────
@@ -61,6 +123,9 @@ class MainWindow(QMainWindow):
         self.doc_session = XmlDocumentSession()
         self.center_panel.set_document_session(self.doc_session)
         self.center_panel.grid_node_value_changed.connect(self._on_grid_node_value_changed)
+        self.center_panel.open_requested.connect(self._open_file_dialog)
+        self.center_panel.recent_file_selected.connect(self.open_document)
+        self.center_panel.set_recent_files(self._recent_files)
         self.current_xml_path = None
         self.current_xml_root = None
         self._last_valid_xml_text = ""
@@ -68,6 +133,18 @@ class MainWindow(QMainWindow):
         self.update_status(state="No XML file opened")
         self._update_window_title()
         self._setup_undo_redo_sync()
+
+        # ── Initial View State & Global Drag-and-Drop Filter ──────────
+        if self.current_xml_root is None:
+            self.center_panel.show_welcome()
+
+        # Synchronize all child panels and widgets with the initial theme
+        self._on_theme_changed(initial_theme)
+
+        self._drop_filter = _FileDropEventFilter(self)
+        app_inst = QApplication.instance()
+        if app_inst:
+            app_inst.installEventFilter(self._drop_filter)
 
     def _update_window_title(self):
         """Updates the window title reflecting active file name and dirty status."""
@@ -86,24 +163,81 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(self.APP_TITLE)
 
     # ==================================================================
-    #  STYLESHEET
+    #  STYLESHEET & THEME HELPERS
     # ==================================================================
     def _load_stylesheet(self):
-        """Load the QSS light theme from resources/styles/."""
-        qss_path = Path(__file__).resolve().parent.parent / "resources" / "styles" / "light_theme.qss"
-        if qss_path.exists():
-            with open(qss_path, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
+        """Stylesheets are managed centrally via ThemeManager at QApplication level."""
+        pass
+
+    def _get_menu_style(self, theme: str) -> str:
+        """Returns the dynamic QMenu stylesheet using theme palette tokens."""
+        pal = PALETTE.get(theme, PALETTE["light"])
+        return f"""
+            QMenu {{
+                background-color: {pal["menu_bg"]};
+                color: {pal["text_primary"]};
+                border: 1px solid {pal["border_default"]};
+                border-radius: 4px;
+                padding: 4px 0;
+            }}
+            QMenu::item {{
+                background-color: transparent;
+                color: {pal["text_primary"]};
+                padding: 6px 28px 6px 20px;
+            }}
+            QMenu::item:selected {{
+                background-color: {pal["menu_item_hover"]};
+                color: {pal["text_primary"]};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background-color: {pal["border_muted"]};
+                margin: 4px 10px;
+            }}
+        """
+
+    def _get_menu_btn_style(self, theme: str) -> str:
+        """Returns the dynamic header QToolButton stylesheet using theme palette tokens."""
+        pal = PALETTE.get(theme, PALETTE["light"])
+        return f"""
+            QToolButton {{
+                background-color: transparent;
+                color: {pal["text_primary"]};
+                border: 1px solid transparent;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QToolButton:hover {{
+                background-color: {pal["toolbar_btn_hover"]};
+                border-color: {pal["border_muted"]};
+                color: {pal["text_primary"]};
+            }}
+            QToolButton:pressed, QToolButton:checked, QToolButton:open {{
+                background-color: {pal["toolbar_btn_pressed"]};
+                border-color: {pal["border_default"]};
+                color: {pal["text_primary"]};
+            }}
+            QToolButton:focus {{
+                outline: none;
+            }}
+            QToolButton::menu-indicator {{
+                image: none;
+                width: 0px;
+            }}
+        """
 
     # ==================================================================
     #  ACTIONS
     # ==================================================================
     def _create_actions(self):
-        """Create all QActions with shortcuts.  Actual logic is not
-        connected yet — each action calls a placeholder slot."""
+        """Create all QActions with shortcuts and vector SVG icons."""
 
-        def _action(name, text, shortcut=None, tip=None, slot=None):
+        def _action(name, text, shortcut=None, tip=None, slot=None, icon_name=None):
             action = QAction(text, self)
+            if icon_name:
+                action.setIcon(IconProvider.get_icon(icon_name))
             if shortcut:
                 action.setShortcut(QKeySequence(shortcut))
             if tip:
@@ -118,32 +252,33 @@ class MainWindow(QMainWindow):
 
         # ── File ─────────────────────────────────────────────────────
         _action("file_new",     "New",         "Ctrl+N",  "Create a new XML document",
-                slot=self._on_new_file)
+                slot=self._on_new_file, icon_name="file-plus")
         _action("file_open",    "Open XML…",   "Ctrl+O",  "Open an XML file",
-                slot=self._open_file_dialog)
+                slot=self._open_file_dialog, icon_name="folder-open")
         _action("file_save",    "Save",         "Ctrl+S",  "Save current file",
-                slot=self._on_save_file)
+                slot=self._on_save_file, icon_name="save")
         _action("file_save_as", "Save As…",     "Ctrl+Shift+S", "Save file as…",
-                slot=self._on_save_file_as)
+                slot=self._on_save_file_as, icon_name="file-down")
         _action("file_exit",    "Exit",         "Ctrl+Q",  "Quit application",
-                slot=self._on_exit)
+                slot=self._on_exit, icon_name="log-out")
 
         # ── Edit ─────────────────────────────────────────────────────
         _action("edit_undo",       "Undo",       "Ctrl+Z",  "Undo last action",
-                slot=self._on_undo)
+                slot=self._on_undo, icon_name="undo-2")
         _action("edit_redo",       "Redo",       "Ctrl+Y",  "Redo last action",
-                slot=self._on_redo)
+                slot=self._on_redo, icon_name="redo-2")
         _action("edit_copy",       "Copy",       "Ctrl+C",  "Copy selection",
-                slot=self._on_copy)
+                slot=self._on_copy, icon_name="copy")
         _action("edit_paste",      "Paste",      "Ctrl+V",  "Paste from clipboard",
-                slot=self._on_paste)
+                slot=self._on_paste, icon_name="clipboard-paste")
         _action("edit_select_all", "Select All", "Ctrl+A",  "Select all",
-                slot=self._on_select_all)
+                slot=self._on_select_all, icon_name="check-square")
 
         # ── View ─────────────────────────────────────────────────────
         _action("view_tree",  "Tree View",    None, "Switch to tree view")
         _action("view_grid",  "Grid View",    None, "Switch to grid view")
-        json_action = _action("view_json",  "JSON Preview", None, "Toggle JSON preview", slot=self._toggle_json_preview)
+        json_action = _action("view_json",  "JSON Preview", None, "Toggle JSON preview",
+                              slot=self._toggle_json_preview, icon_name="panel-right")
         json_action.setCheckable(True)
         json_action.setChecked(False)
 
@@ -157,20 +292,29 @@ class MainWindow(QMainWindow):
 
         # ── Filter ───────────────────────────────────────────────────
         filter_action = _action("filter_apply", "Filter Explorer", None, "Toggle Filter Explorer",
-                                slot=self._toggle_filter_panel)
+                                slot=self._toggle_filter_panel, icon_name="filter")
         filter_action.setCheckable(True)
         filter_action.setChecked(False)
-        _action("filter_clear", "Clear Filter",   None, "Clear active filter", slot=self._on_filter_cleared)
+        _action("filter_clear", "Clear Filter",   None, "Clear active filter",
+                slot=self._on_filter_cleared, icon_name="filter-x")
 
         # ── Convert ──────────────────────────────────────────────────
         _action("convert_to_json",   "XML → JSON",  None, "Convert XML to JSON",
-                slot=self._on_convert_to_json)
+                slot=self._on_convert_to_json, icon_name="arrow-right-left")
         _action("convert_save_json", "Save JSON…",  None, "Save JSON to file",
-                slot=self._on_save_json)
+                slot=self._on_save_json, icon_name="file-down")
 
         # ── Help ─────────────────────────────────────────────────────
         _action("help_about", "About", None, "About XML Analyzer",
-                slot=self._show_about)
+                slot=self._show_about, icon_name="help-circle")
+
+        # ── Theme ────────────────────────────────────────────────────
+        is_dark = self.theme_manager.is_dark()
+        theme_icon = "sun" if is_dark else "moon"
+        self.theme_action = _action("toggle_theme", "Dark Mode", "Ctrl+T", "Toggle between Light and Dark mode",
+                                    slot=self._toggle_theme, icon_name=theme_icon)
+        self.theme_action.setCheckable(True)
+        self.theme_action.setChecked(is_dark)
 
         # Window-level shortcuts for all actions
         for act in self._actions.values():
@@ -186,8 +330,27 @@ class MainWindow(QMainWindow):
         self.file_menu = mb.addMenu("&File")
         self.file_menu.addAction(self._actions["file_new"])
         self.file_menu.addAction(self._actions["file_open"])
+        self.recent_menu = self.file_menu.addMenu("Recent Files")
+        self.recent_menu.setIcon(IconProvider.get_icon("history"))
+        self._rebuild_recent_menu()
         self.file_menu.addAction(self._actions["file_save"])
         self.file_menu.addAction(self._actions["file_save_as"])
+        self.file_menu.addSeparator()
+
+        # Theme submenu inside File menu
+        is_dark = self.theme_manager.is_dark()
+        self.theme_menu = self.file_menu.addMenu("Theme")
+        self.theme_menu.setIcon(IconProvider.get_icon("sun" if is_dark else "moon"))
+        self.theme_light_act = self.theme_menu.addAction("Light Mode")
+        self.theme_light_act.setCheckable(True)
+        self.theme_light_act.setChecked(not is_dark)
+        self.theme_light_act.triggered.connect(lambda: self.theme_manager.apply_theme("light"))
+
+        self.theme_dark_act = self.theme_menu.addAction("Dark Mode")
+        self.theme_dark_act.setCheckable(True)
+        self.theme_dark_act.setChecked(is_dark)
+        self.theme_dark_act.triggered.connect(lambda: self.theme_manager.apply_theme("dark"))
+
         self.file_menu.addSeparator()
         self.file_menu.addAction(self._actions["file_exit"])
 
@@ -199,6 +362,14 @@ class MainWindow(QMainWindow):
         self.edit_menu.addAction(self._actions["edit_copy"])
         self.edit_menu.addAction(self._actions["edit_paste"])
         self.edit_menu.addAction(self._actions["edit_select_all"])
+
+        # ── View ─────────────────────────────────────────────────────
+        self.view_menu = mb.addMenu("&View")
+        self.view_menu.addAction(self._actions["view_tree"])
+        self.view_menu.addAction(self._actions["view_grid"])
+        self.view_menu.addAction(self._actions["view_json"])
+        self.view_menu.addSeparator()
+        self.view_menu.addMenu(self.theme_menu)
 
         # ── Filter ───────────────────────────────────────────────────
         self.filter_menu = mb.addMenu("F&ilter")
@@ -215,31 +386,10 @@ class MainWindow(QMainWindow):
         self.help_menu = mb.addMenu("&Help")
         self.help_menu.addAction(self._actions["help_about"])
 
-        # Popup styling for dropdown menus
-        menu_qss = """
-            QMenu {
-                background-color: #ffffff;
-                color: #1e1e1e;
-                border: 1px solid #c8c8c8;
-                border-radius: 4px;
-                padding: 4px 0;
-            }
-            QMenu::item {
-                background-color: transparent;
-                color: #1e1e1e;
-                padding: 6px 28px 6px 20px;
-            }
-            QMenu::item:selected {
-                background-color: #e8e8e8;
-                color: #1e1e1e;
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #d8d8d8;
-                margin: 4px 10px;
-            }
-        """
-        for m in (self.file_menu, self.edit_menu, self.filter_menu, self.convert_menu, self.help_menu):
+        # Dynamic styling for dropdown menus
+        menu_qss = self._get_menu_style(self.theme_manager.get_current_theme())
+        for m in (self.file_menu, self.recent_menu, self.theme_menu, self.edit_menu,
+                  self.view_menu, self.filter_menu, self.convert_menu, self.help_menu):
             m.setStyleSheet(menu_qss)
 
         # Hide native menubar; toolbar header serves as the unified single-row control bar
@@ -255,38 +405,15 @@ class MainWindow(QMainWindow):
         self.header_toolbar.setFloatable(False)
         self.header_toolbar.setObjectName("header_toolbar")
 
-        btn_style = """
-            QToolButton {
-                background-color: transparent;
-                color: #1e1e1e;
-                border: 1px solid transparent;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-size: 13px;
-                font-weight: 500;
-            }
-            QToolButton:hover {
-                background-color: #e0e0e0;
-                border-color: #d0d0d0;
-                color: #1e1e1e;
-            }
-            QToolButton:pressed, QToolButton:checked, QToolButton:open {
-                background-color: #d4d4d4;
-                border-color: #b0b0b0;
-                color: #1e1e1e;
-            }
-            QToolButton:focus {
-                outline: none;
-            }
-            QToolButton::menu-indicator {
-                image: none;
-                width: 0px;
-            }
-        """
+        btn_style = self._get_menu_btn_style(self.theme_manager.get_current_theme())
 
-        def _make_menu_btn(text: str, menu: QMenu, tooltip: str = "") -> QToolButton:
+        def _make_menu_btn(text: str, menu: QMenu, tooltip: str = "", icon_name: str = "") -> QToolButton:
             btn = QToolButton(self.header_toolbar)
             btn.setText(text)
+            if icon_name:
+                btn.setIcon(IconProvider.get_icon(icon_name))
+                btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                btn.setIconSize(QSize(16, 16))
             btn.setToolTip(tooltip or text)
             btn.setStyleSheet(btn_style)
             btn.setMenu(menu)
@@ -295,16 +422,16 @@ class MainWindow(QMainWindow):
             return btn
 
         # ── Menus on the left ─────────────────────────────────────────
-        self.file_btn = _make_menu_btn("File", self.file_menu, "File operations")
+        self.file_btn = _make_menu_btn("File", self.file_menu, "File operations", icon_name="folder")
         self.header_toolbar.addWidget(self.file_btn)
 
-        self.edit_btn = _make_menu_btn("Edit", self.edit_menu, "Edit operations")
+        self.edit_btn = _make_menu_btn("Edit", self.edit_menu, "Edit operations", icon_name="edit-3")
         self.header_toolbar.addWidget(self.edit_btn)
 
-        self.filter_btn = _make_menu_btn("Filter", self.filter_menu, "Filter operations")
+        self.filter_btn = _make_menu_btn("Filter", self.filter_menu, "Filter operations", icon_name="filter")
         self.header_toolbar.addWidget(self.filter_btn)
 
-        self.convert_btn = _make_menu_btn("Convert", self.convert_menu, "Conversion operations")
+        self.convert_btn = _make_menu_btn("Convert", self.convert_menu, "Conversion operations", icon_name="arrow-right-left")
         self.header_toolbar.addWidget(self.convert_btn)
 
         # ── Separator right after Convert ─────────────────────────────
@@ -315,15 +442,12 @@ class MainWindow(QMainWindow):
         self.search_panel.search_requested.connect(self._perform_search)
         self.header_toolbar.addWidget(self.search_panel)
 
-        # ── Expanding Spacer pushing Help to the far right ───────────
+        # ── Expanding Spacer to push content to the left ──────────────
         spacer = QWidget(self.header_toolbar)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         spacer.setStyleSheet("background: transparent;")
         self.header_toolbar.addWidget(spacer)
-
-        # ── Help button at the far right ──────────────────────────────
-        self.help_btn = _make_menu_btn("Help", self.help_menu, "Help and About")
-        self.header_toolbar.addWidget(self.help_btn)
+        self.help_btn = None
 
     # ==================================================================
     #  CENTRAL AREA — three resizable panels
@@ -334,7 +458,9 @@ class MainWindow(QMainWindow):
         # Create panels
         self.center_panel = CenterPanel()
         self.center_panel.xml_content_changed.connect(self._on_text_view_content_changed)
+        self.center_panel.filter_cleared.connect(self._on_filter_cleared)
         self.json_panel = JsonPreviewPanel()
+        self.json_panel.close_requested.connect(self._on_json_preview_closed)
 
         # Horizontal splitter: Center | JSON
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -630,6 +756,123 @@ class MainWindow(QMainWindow):
         self._update_undo_redo_actions()
         return True
 
+    def _load_recent_files(self):
+        """Loads recent files list from persistent QSettings."""
+        settings = QSettings("XMLAnalyzer", "XMLAnalyzer")
+        raw_list = settings.value("recent_files", [])
+        if isinstance(raw_list, list):
+            self._recent_files = [str(p) for p in raw_list if str(p).strip()]
+        else:
+            self._recent_files = []
+
+    def _save_recent_files(self):
+        """Saves recent files list to persistent QSettings."""
+        settings = QSettings("XMLAnalyzer", "XMLAnalyzer")
+        settings.setValue("recent_files", self._recent_files)
+
+    def _add_recent_file(self, filepath: str):
+        """Adds or moves a validated XML file to the top of Recent Files."""
+        norm_key = _normalize_path(filepath)
+        if not norm_key:
+            return
+        clean_path = os.path.abspath(os.path.normpath(str(filepath).strip()))
+        self._recent_files = [p for p in self._recent_files if _normalize_path(p) != norm_key]
+        self._recent_files.insert(0, clean_path)
+        self._recent_files = self._recent_files[:10]
+        self._save_recent_files()
+        self._rebuild_recent_menu()
+        self.center_panel.set_recent_files(self._recent_files)
+
+    def _remove_recent_file(self, filepath: str):
+        """Removes a missing or invalid file from Recent Files."""
+        norm_key = _normalize_path(filepath)
+        self._recent_files = [p for p in self._recent_files if _normalize_path(p) != norm_key]
+        self._save_recent_files()
+        self._rebuild_recent_menu()
+        self.center_panel.set_recent_files(self._recent_files)
+
+    def _clear_recent_files(self):
+        """Clears all entries from Recent Files."""
+        self._recent_files.clear()
+        self._save_recent_files()
+        self._rebuild_recent_menu()
+        self.center_panel.set_recent_files(self._recent_files)
+
+    def _rebuild_recent_menu(self):
+        """Reconstructs the File -> Recent Files submenu."""
+        if not hasattr(self, "recent_menu") or self.recent_menu is None:
+            return
+        self.recent_menu.clear()
+        if not self._recent_files:
+            disabled_act = self.recent_menu.addAction("(No Recent Files)")
+            disabled_act.setEnabled(False)
+        else:
+            for idx, path_str in enumerate(self._recent_files, start=1):
+                fname = Path(path_str).name
+                act = self.recent_menu.addAction(f"{idx}. {fname}")
+                act.setToolTip(path_str)
+                act.setStatusTip(path_str)
+                act.triggered.connect(lambda checked, p=path_str: self.open_document(p))
+            self.recent_menu.addSeparator()
+            clear_act = self.recent_menu.addAction("Clear Recent Files")
+            clear_act.triggered.connect(self._clear_recent_files)
+
+    def open_document(self, filepath: str) -> bool:
+        """Unified user-facing entry point for opening an XML document from any source.
+        Performs path verification, single dirty-document check, and recent files management.
+        """
+        if not filepath or not str(filepath).strip():
+            return False
+
+        clean_path = os.path.abspath(os.path.normpath(str(filepath).strip()))
+        norm_key = _normalize_path(clean_path)
+
+        # 1. Verify file exists on disk and is a regular file
+        if not os.path.isfile(clean_path):
+            is_in_recent = any(_normalize_path(p) == norm_key for p in getattr(self, "_recent_files", []))
+            if is_in_recent:
+                ret = QMessageBox.warning(
+                    self,
+                    "Dosya Bulunamadı",
+                    f"Seçilen dosya diskte bulunamadı:\n{clean_path}\n\nBu dosya son açılanlar listesinden kaldırılsın mı?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if ret == QMessageBox.StandardButton.Yes:
+                    self._remove_recent_file(clean_path)
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Dosya Bulunamadı",
+                    f"Belirtilen XML dosyası bulunamadı:\n{clean_path}"
+                )
+            return False
+
+        # 2. Check if the same file is already open
+        if self.current_xml_path and _normalize_path(self.current_xml_path) == norm_key:
+            if not self.doc_session.is_dirty():
+                self._add_recent_file(clean_path)
+                self.center_panel.show_editor()
+                return True
+            else:
+                # Same file open but dirty: prompt user
+                if not self._maybe_save_changes():
+                    return False
+                success = self.load_xml_file(clean_path)
+                if success:
+                    self._add_recent_file(clean_path)
+                return success
+
+        # 3. Different file: single dirty-document check
+        if not self._maybe_save_changes():
+            return False
+
+        # 4. Load via canonical programmatic loader
+        success = self.load_xml_file(clean_path)
+        if success:
+            self._add_recent_file(clean_path)
+        return success
+
     def _open_file_dialog(self):
         filepath, _ = QFileDialog.getOpenFileName(
             self,
@@ -639,9 +882,7 @@ class MainWindow(QMainWindow):
         )
         if not filepath:
             return
-        if not self._maybe_save_changes():
-            return
-        self.load_xml_file(filepath)
+        self.open_document(filepath)
 
     def _on_exit(self):
         """Handles File -> Exit action (Ctrl+Q)."""
@@ -655,10 +896,20 @@ class MainWindow(QMainWindow):
 
         if is_user_close:
             if self._maybe_save_changes():
+                if hasattr(self, "_drop_filter") and self._drop_filter:
+                    app_inst = QApplication.instance()
+                    if app_inst:
+                        app_inst.removeEventFilter(self._drop_filter)
+                    self._drop_filter = None
                 event.accept()
             else:
                 event.ignore()
         else:
+            if hasattr(self, "_drop_filter") and self._drop_filter:
+                app_inst = QApplication.instance()
+                if app_inst:
+                    app_inst.removeEventFilter(self._drop_filter)
+                self._drop_filter = None
             event.accept()
 
     def load_xml_file(self, filepath: str) -> bool:
@@ -917,7 +1168,16 @@ class MainWindow(QMainWindow):
         self.center_panel.grid_view.expand_to_target(target)
 
     def _on_filter_cleared(self):
-        self.center_panel.grid_view.clear_filter()
+        if hasattr(self, "filter_panel") and self.filter_panel:
+            self.filter_panel.reset_filter()
+        if hasattr(self, "center_panel") and self.center_panel and hasattr(self.center_panel, "grid_view"):
+            self.center_panel.grid_view.clear_filter()
+
+    def _on_json_preview_closed(self):
+        """Handles close button clicked on JSON Preview panel."""
+        self.json_panel.hide()
+        if "view_json" in self._actions:
+            self._actions["view_json"].setChecked(False)
 
     # ==================================================================
     #  PLACEHOLDER SLOTS
@@ -937,6 +1197,7 @@ class MainWindow(QMainWindow):
             "<h3>XML Analyzer</h3>"
             "<p>A professional desktop XML analysis tool.</p>"
             "<p>Built with Python 3.12, PyQt6 &amp; lxml.</p>"
+            "<p style='color:#6c7086;'>Icons: Lucide Icons (ISC License - https://lucide.dev)</p>"
             "<p style='color:#6c7086;'>Version 0.1.0-dev</p>",
         )
 
@@ -1197,3 +1458,101 @@ class MainWindow(QMainWindow):
             focused.selectAll()
         elif hasattr(self, "json_panel") and self.json_panel.isVisible():
             self.json_panel.text_edit.selectAll()
+
+    # ==================================================================
+    #  THEME MANAGEMENT
+    # ==================================================================
+    def _toggle_theme(self):
+        """Toggles between Light and Dark themes."""
+        self.theme_manager.toggle_theme()
+
+    def _on_theme_changed(self, theme_name: str):
+        """Central listener for theme change events."""
+        is_dark = (theme_name == "dark")
+        if hasattr(self, "theme_action"):
+            self.theme_action.blockSignals(True)
+            self.theme_action.setChecked(is_dark)
+            self.theme_action.setIcon(IconProvider.get_icon("sun" if is_dark else "moon"))
+            self.theme_action.blockSignals(False)
+
+        if hasattr(self, "theme_light_act"):
+            self.theme_light_act.setChecked(not is_dark)
+        if hasattr(self, "theme_dark_act"):
+            self.theme_dark_act.setChecked(is_dark)
+        if hasattr(self, "theme_menu") and self.theme_menu:
+            self.theme_menu.setIcon(IconProvider.get_icon("sun" if is_dark else "moon"))
+
+        # Re-apply menu and toolbar styles
+        menu_qss = self._get_menu_style(theme_name)
+        for m in (getattr(self, "file_menu", None), getattr(self, "recent_menu", None),
+                  getattr(self, "theme_menu", None), getattr(self, "edit_menu", None),
+                  getattr(self, "view_menu", None), getattr(self, "filter_menu", None),
+                  getattr(self, "convert_menu", None), getattr(self, "help_menu", None)):
+            if m:
+                m.setStyleSheet(menu_qss)
+
+        btn_qss = self._get_menu_btn_style(theme_name)
+        for b in (getattr(self, "file_btn", None), getattr(self, "edit_btn", None),
+                  getattr(self, "filter_btn", None), getattr(self, "convert_btn", None)):
+            if b:
+                b.setStyleSheet(btn_qss)
+
+        # Re-apply all icons across actions, buttons, and child panels
+        self._reapply_theme_icons(theme_name)
+
+    def _reapply_theme_icons(self, theme_name: Optional[str] = None):
+        """Re-assigns icons across all actions, menus, toolbar buttons, and child widgets."""
+        t = theme_name or self.theme_manager.get_current_theme()
+        is_dark = (t == "dark")
+
+        # 1. Action icons
+        action_icon_map = {
+            "file_new": "file-plus",
+            "file_open": "folder-open",
+            "file_save": "save",
+            "file_save_as": "file-down",
+            "file_exit": "log-out",
+            "edit_undo": "undo-2",
+            "edit_redo": "redo-2",
+            "edit_copy": "copy",
+            "edit_paste": "clipboard-paste",
+            "edit_select_all": "check-square",
+            "view_json": "panel-right",
+            "filter_apply": "filter",
+            "filter_clear": "filter-x",
+            "convert_to_json": "arrow-right-left",
+            "convert_save_json": "file-code",
+            "help_about": "help-circle",
+            "toggle_theme": "sun" if is_dark else "moon",
+        }
+        for act_name, icon_name in action_icon_map.items():
+            if act_name in self._actions:
+                self._actions[act_name].setIcon(IconProvider.get_icon(icon_name))
+
+        # 2. Menus
+        if hasattr(self, "recent_menu") and self.recent_menu:
+            self.recent_menu.setIcon(IconProvider.get_icon("history"))
+        if hasattr(self, "theme_menu") and self.theme_menu:
+            self.theme_menu.setIcon(IconProvider.get_icon("sun" if is_dark else "moon"))
+
+        # 3. Toolbar buttons
+        if hasattr(self, "file_btn") and self.file_btn:
+            self.file_btn.setIcon(IconProvider.get_icon("folder"))
+        if hasattr(self, "edit_btn") and self.edit_btn:
+            self.edit_btn.setIcon(IconProvider.get_icon("edit-3"))
+        if hasattr(self, "filter_btn") and self.filter_btn:
+            self.filter_btn.setIcon(IconProvider.get_icon("filter"))
+        if hasattr(self, "convert_btn") and self.convert_btn:
+            self.convert_btn.setIcon(IconProvider.get_icon("arrow-right-left"))
+
+        # 4. Child panels
+        if hasattr(self, "search_panel") and hasattr(self.search_panel, "refresh_theme"):
+            self.search_panel.refresh_theme(t)
+        if hasattr(self, "search_results_panel") and hasattr(self.search_results_panel, "refresh_theme"):
+            self.search_results_panel.refresh_theme(t)
+        if hasattr(self, "center_panel") and hasattr(self.center_panel, "refresh_theme"):
+            self.center_panel.refresh_theme(t)
+        if hasattr(self, "json_panel") and hasattr(self.json_panel, "refresh_theme"):
+            self.json_panel.refresh_theme(t)
+        if hasattr(self, "filter_panel") and hasattr(self.filter_panel, "refresh_theme"):
+            self.filter_panel.refresh_theme(t)

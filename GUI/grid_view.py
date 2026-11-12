@@ -20,6 +20,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QUndoStack, QUndoCommand
 
+_CURRENT_THEME: str = "light"
+
+
+def _get_grid_palette() -> dict[str, str]:
+    """Returns semantic color tokens for the active Grid View theme."""
+    from GUI.theme_manager import PALETTE
+    return PALETTE.get(_CURRENT_THEME, PALETTE["light"])
+
 
 def _is_node_editable(node: _GridNode, session: Optional[object] = None) -> bool:
     """
@@ -176,16 +184,17 @@ class GridCellEditor(QLineEdit):
         self.original_label = original_label
         self._is_committing = False
 
-        self.setStyleSheet("""
-            QLineEdit {
-                background: #ffffff;
-                color: #1e1e1e;
-                border: 2px solid #0066cc;
+        pal = _get_grid_palette()
+        self.setStyleSheet(f"""
+            QLineEdit {{
+                background: {pal['panel_base']};
+                color: {pal['text_primary']};
+                border: 2px solid {pal['accent']};
                 border-radius: 2px;
                 padding: 1px 4px;
                 font-family: inherit;
                 font-size: 11px;
-            }
+            }}
         """)
         self.selectAll()
 
@@ -282,13 +291,16 @@ class XmlPathDialog(QDialog):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
+        pal = _get_grid_palette()
+
         header_layout = QHBoxLayout()
         header_label = QLabel("XML Element Path:")
-        header_label.setStyleSheet("font-weight: 600; color: #333333; font-size: 12px;")
+        header_label.setStyleSheet(f"font-weight: 600; color: {pal['text_primary']}; font-size: 12px;")
         header_layout.addWidget(header_label)
 
         self.copied_feedback = QLabel("")
-        self.copied_feedback.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px;")
+        feedback_color = "#81c784" if _CURRENT_THEME == "dark" else "#2e7d32"
+        self.copied_feedback.setStyleSheet(f"color: {feedback_color}; font-weight: bold; font-size: 11px;")
         header_layout.addStretch()
         header_layout.addWidget(self.copied_feedback)
         layout.addLayout(header_layout)
@@ -296,20 +308,20 @@ class XmlPathDialog(QDialog):
         self.path_edit = QLineEdit(path, self)
         self.path_edit.setReadOnly(True)
         self.path_edit.setCursorPosition(0)
-        self.path_edit.setStyleSheet("""
-            QLineEdit {
-                background: #f8f9fa;
-                border: 1px solid #ced4da;
+        self.path_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background: {pal['search_input_bg']};
+                border: 1px solid {pal['search_input_border']};
                 border-radius: 3px;
                 padding: 6px 8px;
                 font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
                 font-size: 12px;
-                color: #212529;
-            }
-            QLineEdit:focus {
-                border-color: #80bdff;
-                background: #ffffff;
-            }
+                color: {pal['text_primary']};
+            }}
+            QLineEdit:focus {{
+                border-color: {pal['accent']};
+                background: {pal['panel_base']};
+            }}
         """)
         layout.addWidget(self.path_edit)
 
@@ -318,43 +330,43 @@ class XmlPathDialog(QDialog):
 
         self.copy_btn = QPushButton("Kopyala", self)
         self.copy_btn.setFixedWidth(90)
-        self.copy_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0066cc;
+        self.copy_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {pal['accent']};
                 color: white;
                 border: none;
                 border-radius: 3px;
                 padding: 5px 12px;
                 font-size: 12px;
                 font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #0052a3;
-            }
-            QPushButton:pressed {
-                background-color: #003d7a;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {pal['accent_hover']};
+            }}
+            QPushButton:pressed {{
+                background-color: {pal['accent_pressed']};
+            }}
         """)
         self.copy_btn.clicked.connect(self._copy_to_clipboard)
         btn_layout.addWidget(self.copy_btn)
 
         self.close_btn = QPushButton("Kapat", self)
         self.close_btn.setFixedWidth(80)
-        self.close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f1f3f4;
-                color: #333333;
-                border: 1px solid #dadce0;
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {pal['toolbar_btn_hover']};
+                color: {pal['text_primary']};
+                border: 1px solid {pal['border_default']};
                 border-radius: 3px;
                 padding: 5px 12px;
                 font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #e8eaed;
-            }
-            QPushButton:pressed {
-                background-color: #dadce0;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {pal['toolbar_btn_pressed']};
+            }}
+            QPushButton:pressed {{
+                background-color: {pal['toolbar_btn_pressed']};
+            }}
         """)
         self.close_btn.clicked.connect(self._on_close)
         btn_layout.addWidget(self.close_btn)
@@ -378,7 +390,8 @@ class GridCellLabel(QLabel):
         super().__init__(node.value or "", parent)
         self.node = node
         self.grid_panel = grid_panel
-        self.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+        pal = _get_grid_palette()
+        self.setStyleSheet(f"QLabel {{ background: transparent; border: none; color: {pal['text_primary']}; }}")
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         session = getattr(grid_panel, "doc_session", None) if grid_panel else None
@@ -468,7 +481,8 @@ class GridElementLabel(QLabel):
         super().__init__(f"<b>{node.element}</b>", parent)
         self.node = node
         self.grid_panel = grid_panel
-        self.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+        pal = _get_grid_palette()
+        self.setStyleSheet(f"QLabel {{ background: transparent; border: none; color: {pal['text_primary']}; }}")
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
@@ -553,22 +567,23 @@ class CommentWidget(QFrame):
     def __init__(self, text: str, parent=None):
         super().__init__(parent)
         self.setObjectName("commentWidget")
-        self.setStyleSheet("""
-            QFrame#commentWidget {
-                background-color: #f6fcf6;
-                border: 1px solid #c8e6c9;
+        pal = _get_grid_palette()
+        self.setStyleSheet(f"""
+            QFrame#commentWidget {{
+                background-color: {pal['grid_comment_bg']};
+                border: 1px solid {pal['border_muted']};
                 border-radius: 3px;
-            }
+            }}
         """)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
         badge = QLabel("Comment")
-        badge.setStyleSheet("color: #2e7d32; font-weight: bold; font-size: 11px; background: transparent;")
+        badge.setStyleSheet(f"color: {pal['grid_comment_text']}; font-weight: bold; font-size: 11px; background: transparent;")
 
         comment_label = QLabel(text)
-        comment_label.setStyleSheet("color: #1b5e20; font-family: monospace; font-size: 11px; background: transparent;")
+        comment_label.setStyleSheet(f"color: {pal['grid_comment_text']}; font-family: monospace; font-size: 11px; background: transparent;")
         comment_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         comment_label.setWordWrap(True)
 
@@ -624,30 +639,31 @@ class HeaderWidget(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(6)
-        
+
+        pal = _get_grid_palette()
         self.toggle_btn = QPushButton("-" if node.is_expanded else "+")
         self.toggle_btn.setFixedSize(16, 16)
         self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.toggle_btn.setStyleSheet("""
-            QPushButton {
-                border: 1px solid #a0a0a0;
-                background: #f0f0f0;
+        self.toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                border: 1px solid {pal['border_default']};
+                background: {pal['grid_frame_header']};
                 font-family: monospace;
                 font-weight: bold;
                 font-size: 11px;
                 padding: 0px;
                 border-radius: 2px;
-                color: #1e1e1e;
-            }
-            QPushButton:hover {
-                background: #e0e0e0;
-                border: 1px solid #808080;
-            }
+                color: {pal['text_primary']};
+            }}
+            QPushButton:hover {{
+                background: {pal['toolbar_btn_hover']};
+                border: 1px solid {pal['border_muted']};
+            }}
         """)
         self.toggle_btn.clicked.connect(self.toggle_callback)
         
         self.title_label = GridElementLabel(node, grid_panel)
-        self.title_label.setStyleSheet("QLabel { font-weight: bold; color: #1e1e1e; font-size: 12px; background: transparent; }")
+        self.title_label.setStyleSheet(f"QLabel {{ font-weight: bold; color: {pal['text_primary']}; font-size: 12px; background: transparent; }}")
         
         layout.addWidget(self.toggle_btn)
         layout.addWidget(self.title_label)
@@ -666,14 +682,15 @@ class ExpandableFrame(QFrame):
         self.node = node
         self.on_rebuild = on_rebuild
         self.grid_panel = grid_panel
-        
+
+        pal = _get_grid_palette()
         self.setObjectName("expandableFrame")
-        self.setStyleSheet("""
-            QFrame#expandableFrame {
-                border: 1px solid #d4d8dc;
+        self.setStyleSheet(f"""
+            QFrame#expandableFrame {{
+                border: 1px solid {pal['grid_frame_border']};
                 border-radius: 3px;
-                background-color: #ffffff;
-            }
+                background-color: {pal['grid_cell_bg']};
+            }}
         """)
         
         self.main_layout = QVBoxLayout(self)
@@ -684,20 +701,20 @@ class ExpandableFrame(QFrame):
         self.header_widget = HeaderWidget(node, self.toggle, grid_panel)
         self.header_widget.setObjectName("expandableHeader")
         if node.is_expanded:
-            self.header_widget.setStyleSheet("""
-                QWidget#expandableHeader {
-                    background-color: #f1f4f8;
-                    border-bottom: 1px solid #d4d8dc;
+            self.header_widget.setStyleSheet(f"""
+                QWidget#expandableHeader {{
+                    background-color: {pal['grid_frame_header']};
+                    border-bottom: 1px solid {pal['grid_frame_border']};
                     border-top-left-radius: 3px;
                     border-top-right-radius: 3px;
-                }
+                }}
             """)
         else:
-            self.header_widget.setStyleSheet("""
-                QWidget#expandableHeader {
-                    background-color: #f8fafc;
+            self.header_widget.setStyleSheet(f"""
+                QWidget#expandableHeader {{
+                    background-color: {pal['grid_frame_header']};
                     border-radius: 3px;
-                }
+                }}
             """)
         self.main_layout.addWidget(self.header_widget)
 
@@ -705,7 +722,7 @@ class ExpandableFrame(QFrame):
         if node.is_expanded:
             self.content_widget = QWidget()
             self.content_widget.setObjectName("expandableContent")
-            self.content_widget.setStyleSheet("QWidget#expandableContent { background-color: #ffffff; border-bottom-left-radius: 3px; border-bottom-right-radius: 3px; }")
+            self.content_widget.setStyleSheet(f"QWidget#expandableContent {{ background-color: {pal['grid_cell_bg']}; border-bottom-left-radius: 3px; border-bottom-right-radius: 3px; }}")
             self.content_layout = QVBoxLayout(self.content_widget)
             self.content_layout.setContentsMargins(10, 6, 10, 6)
             self.content_layout.setSpacing(6)
@@ -730,6 +747,7 @@ class TableDisplayWidget(QWidget):
         self.on_rebuild = on_rebuild
         self.grid_panel = grid_panel
         self.items = items
+        pal = _get_grid_palette()
         
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 4, 0, 4)
@@ -742,27 +760,27 @@ class TableDisplayWidget(QWidget):
         self.toggle_btn = QPushButton("-" if items[0].is_expanded else "+")
         self.toggle_btn.setFixedSize(16, 16)
         self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.toggle_btn.setStyleSheet("""
-            QPushButton {
-                border: 1px solid #a0a0a0;
-                background: #f0f0f0;
+        self.toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                border: 1px solid {pal['border_default']};
+                background: {pal['grid_frame_header']};
                 font-family: monospace;
                 font-weight: bold;
                 font-size: 11px;
                 padding: 0px;
                 border-radius: 2px;
-                color: #1e1e1e;
-            }
-            QPushButton:hover {
-                background: #e0e0e0;
-                border: 1px solid #808080;
-            }
+                color: {pal['text_primary']};
+            }}
+            QPushButton:hover {{
+                background: {pal['toolbar_btn_hover']};
+                border: 1px solid {pal['border_muted']};
+            }}
         """)
         self.toggle_btn.clicked.connect(self.toggle)
         header_layout.addWidget(self.toggle_btn)
         
         lbl = QLabel(f"<b>{element_name} ({len(items)})</b>")
-        lbl.setStyleSheet("color: #b8960c; font-size: 12px;")
+        lbl.setStyleSheet(f"color: {pal['accent'] if _CURRENT_THEME == 'dark' else '#b8960c'}; font-size: 12px;")
         lbl.setCursor(Qt.CursorShape.PointingHandCursor)
         lbl.mousePressEvent = lambda e: self.toggle() if e.button() == Qt.MouseButton.LeftButton else None
         
@@ -799,14 +817,14 @@ class TableDisplayWidget(QWidget):
         # Grid frame oluşturma
         grid_frame = QFrame()
         grid_frame.setObjectName("gridTableFrame")
-        grid_frame.setStyleSheet("QFrame#gridTableFrame { background: #d8d8d8; border: 1px solid #c8c8c8; }")
+        grid_frame.setStyleSheet(f"QFrame#gridTableFrame {{ background: {pal['grid_border']}; border: 1px solid {pal['border_default']}; }}")
         grid_layout = QGridLayout(grid_frame)
         grid_layout.setContentsMargins(0, 0, 0, 0)
         grid_layout.setSpacing(1)
         
         # Row number column header
         hdr = QLabel("")
-        hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
+        hdr.setStyleSheet(f"background: {pal['grid_table_header']}; padding: 4px; border: none;")
         grid_layout.addWidget(hdr, 0, 0)
         
         col_offset = 1
@@ -814,7 +832,7 @@ class TableDisplayWidget(QWidget):
         # Eğer namespace varsa ilk sütunu ekle
         if has_namespaces:
             ns_hdr = QLabel(f"<b>{ns_header_title}</b>")
-            ns_hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
+            ns_hdr.setStyleSheet(f"background: {pal['grid_table_header']}; color: {pal['text_primary']}; padding: 4px; border: none;")
             grid_layout.addWidget(ns_hdr, 0, col_offset)
             col_offset += 1
         
@@ -851,11 +869,11 @@ class TableDisplayWidget(QWidget):
         for c, col_name in enumerate(columns):
             hdr = QLabel(f"<b>{col_name}</b>")
             if is_target_elem_in_table and c == target_col_index:
-                hdr.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 4px; border: 2px solid #e6b800; border-radius: 2px; font-weight: bold;")
+                hdr.setStyleSheet(f"background-color: {pal['grid_search_bg']}; color: {pal['grid_search_text']}; padding: 4px; border: 2px solid {pal['grid_search_border']}; border-radius: 2px; font-weight: bold;")
                 if self.grid_panel._target_widget is None:
                     self.grid_panel._target_widget = hdr
             else:
-                hdr.setStyleSheet("background: #e8e8e8; padding: 4px; border: none;")
+                hdr.setStyleSheet(f"background: {pal['grid_table_header']}; color: {pal['text_primary']}; padding: 4px; border: none;")
             grid_layout.addWidget(hdr, 0, col_offset + c)
             
         # Satırları oluşturma
@@ -877,14 +895,14 @@ class TableDisplayWidget(QWidget):
             row_lbl = QLabel(row_text)
             row_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignTop)
             if is_out_of_filter:
-                row_lbl.setStyleSheet("background: #ffe0b2; padding: 6px; font-size: 11px; font-weight: bold; color: #b78103; border: 1px solid #ffb74d;")
+                row_lbl.setStyleSheet(f"background: {pal['sync_banner_bg']}; padding: 6px; font-size: 11px; font-weight: bold; color: {pal['sync_banner_text']}; border: 1px solid {pal['sync_banner_border']};")
                 row_lbl.setToolTip("Bu kayıt düzenleme sonrasında aktif filtre kriterini karşılamamaktadır.")
             elif is_target_row or is_child_target_row:
-                row_lbl.setStyleSheet("background: #fff8dc; padding: 6px; font-size: 11px; font-weight: bold; color: #1e1e1e; border: 2px solid #e6b800; border-right: none;")
+                row_lbl.setStyleSheet(f"background: {pal['grid_search_row_bg']}; padding: 6px; font-size: 11px; font-weight: bold; color: {pal['grid_search_text']}; border: 2px solid {pal['grid_search_border']}; border-right: none;")
                 if self.grid_panel._target_widget is None:
                     self.grid_panel._target_widget = row_lbl
             else:
-                row_lbl.setStyleSheet("background: #f0f0f0; padding: 6px; font-size: 11px; color: #888; border: none;")
+                row_lbl.setStyleSheet(f"background: {pal['grid_table_header']}; padding: 6px; font-size: 11px; color: {pal['text_secondary']}; border: none;")
             grid_layout.addWidget(row_lbl, r + 1, 0)
             
             current_col = 1
@@ -896,8 +914,6 @@ class TableDisplayWidget(QWidget):
                 if ns_node and ns_node.children:
                     lines = []
                     for nc in ns_node.children:
-                        # Eğer birden fazla namespace varsa prefix=URI formatında göster,
-                        # tekse sadece URI'yi göster ki hücre gereksiz kalabalık olmasın.
                         if len(ns_node.children) > 1:
                             lines.append(f"{nc.element}={nc.value}")
                         else:
@@ -907,9 +923,9 @@ class TableDisplayWidget(QWidget):
                 ns_lbl = QLabel(ns_val)
                 ns_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
                 if is_target_row:
-                    ns_lbl.setStyleSheet("background: #fffdf0; padding: 6px; border-top: 2px solid #e6b800; border-bottom: 2px solid #e6b800; color: #333;")
+                    ns_lbl.setStyleSheet(f"background: {pal['grid_search_cell_bg']}; padding: 6px; border-top: 2px solid {pal['grid_search_border']}; border-bottom: 2px solid {pal['grid_search_border']}; color: {pal['text_primary']};")
                 else:
-                    ns_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none; color: #333;")
+                    ns_lbl.setStyleSheet(f"background: {pal['grid_cell_bg']}; padding: 6px; border: none; color: {pal['text_primary']};")
                 ns_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 grid_layout.addWidget(ns_lbl, r + 1, current_col)
                 current_col += 1
@@ -924,15 +940,15 @@ class TableDisplayWidget(QWidget):
                 val_lbl = GridCellLabel(item, self.grid_panel) if self.grid_panel else QLabel(item.value)
                 val_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
                 if is_out_of_filter:
-                    val_lbl.setStyleSheet("background: #fff8e1; padding: 6px; border: 1px dashed #ffb74d; color: #333;")
+                    val_lbl.setStyleSheet(f"background: {pal['sync_banner_bg']}; padding: 6px; border: 1px dashed {pal['sync_banner_border']}; color: {pal['text_primary']};")
                 elif is_target_row:
-                    val_lbl.setStyleSheet("background: #fffdf0; padding: 6px; border: 2px solid #e6b800;")
+                    val_lbl.setStyleSheet(f"background: {pal['grid_search_cell_bg']}; padding: 6px; border: 2px solid {pal['grid_search_border']}; color: {pal['text_primary']};")
                 elif is_target_val:
-                    val_lbl.setStyleSheet("background: #fffacd; padding: 6px; border: none;")
+                    val_lbl.setStyleSheet(f"background: {pal['grid_search_bg']}; color: {pal['grid_search_text']}; padding: 6px; border: none;")
                     if self.grid_panel:
                         self.grid_panel._target_widget = val_lbl
                 else:
-                    val_lbl.setStyleSheet("background: #ffffff; padding: 6px; border: none;")
+                    val_lbl.setStyleSheet(f"background: {pal['grid_cell_bg']}; color: {pal['text_primary']}; padding: 6px; border: none;")
                 grid_layout.addWidget(val_lbl, r + 1, current_col)
             else:
                 for c, col_name in enumerate(columns):
@@ -943,15 +959,14 @@ class TableDisplayWidget(QWidget):
                     is_specific_target_cell = (is_child_target_row and c == target_col_index)
 
                     if is_specific_target_cell:
-                        cell_widget.setStyleSheet("QWidget#tableCellWidget { background: #fffdf0; border: 2px solid #e6b800; border-radius: 2px; }")
-                        # If the cell's direct single child element is itself the target, target_widget points to cell_widget
+                        cell_widget.setStyleSheet(f"QWidget#tableCellWidget {{ background: {pal['grid_search_cell_bg']}; border: 2px solid {pal['grid_search_border']}; border-radius: 2px; }}")
                         if len(col_children) == 1 and col_children[0].lxml_element is target_el:
                             self.grid_panel._target_widget = cell_widget
                     elif is_target_row:
-                        border_right = "border-right: 2px solid #e6b800;" if c == len(columns) - 1 else ""
-                        cell_widget.setStyleSheet(f"QWidget#tableCellWidget {{ background: #fffdf0; border-top: 2px solid #e6b800; border-bottom: 2px solid #e6b800; {border_right} }}")
+                        border_right = f"border-right: 2px solid {pal['grid_search_border']};" if c == len(columns) - 1 else ""
+                        cell_widget.setStyleSheet(f"QWidget#tableCellWidget {{ background: {pal['grid_search_cell_bg']}; border-top: 2px solid {pal['grid_search_border']}; border-bottom: 2px solid {pal['grid_search_border']}; {border_right} }}")
                     else:
-                        cell_widget.setStyleSheet("QWidget#tableCellWidget { background: #ffffff; border: none; }")
+                        cell_widget.setStyleSheet(f"QWidget#tableCellWidget {{ background: {pal['grid_cell_bg']}; border: none; }}")
                     cell_layout = QVBoxLayout(cell_widget)
                     cell_layout.setContentsMargins(6, 6, 6, 6)
                     cell_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -967,12 +982,12 @@ class TableDisplayWidget(QWidget):
                             if not child_node.children:
                                 lbl = GridCellLabel(child_node, self.grid_panel) if self.grid_panel else QLabel(child_node.value)
                                 if is_child_target_val:
-                                    lbl.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 2px 4px; border-radius: 2px;")
+                                    lbl.setStyleSheet(f"background-color: {pal['grid_search_bg']}; color: {pal['grid_search_text']}; padding: 2px 4px; border-radius: 2px;")
                                     self.grid_panel._target_widget = lbl
                                 elif is_out_of_filter:
-                                    lbl.setStyleSheet("background-color: #fff8e1; color: #1e1e1e; padding: 2px 4px; border: 1px dashed #ffb74d; border-radius: 2px;")
+                                    lbl.setStyleSheet(f"background-color: {pal['sync_banner_bg']}; color: {pal['sync_banner_text']}; padding: 2px 4px; border: 1px dashed {pal['sync_banner_border']}; border-radius: 2px;")
                                 else:
-                                    lbl.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+                                    lbl.setStyleSheet(f"QLabel {{ background: transparent; border: none; color: {pal['text_primary']}; }}")
                                 cell_layout.addWidget(lbl)
                             else:
                                 nested = render_node(child_node, self.on_rebuild, self.grid_panel)
@@ -992,6 +1007,7 @@ class TableDisplayWidget(QWidget):
 
 def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
     """Recursively render a node as a widget."""
+    pal = _get_grid_palette()
     if getattr(node, "node_type", "element") == "comment":
         return CommentWidget(node.value)
 
@@ -1001,10 +1017,9 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
         l.setContentsMargins(4, 2, 4, 2)
         l.setSpacing(8)
         lbl_elem = GridElementLabel(node, grid_panel)
-        lbl_elem.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+        lbl_elem.setStyleSheet(f"QLabel {{ background: transparent; border: none; color: {pal['text_primary']}; }}")
         lbl_val = GridCellLabel(node, grid_panel) if grid_panel else QLabel(node.value)
-        if not isinstance(lbl_val, GridCellLabel):
-            lbl_val.setStyleSheet("QLabel { background: transparent; border: none; color: #1e1e1e; }")
+        lbl_val.setStyleSheet(f"QLabel {{ background: transparent; border: none; color: {pal['text_primary']}; }}")
         l.addWidget(lbl_elem)
         l.addWidget(lbl_val)
 
@@ -1012,7 +1027,7 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
                       and node.lxml_element in grid_panel._out_of_filter_elements)
         if is_out:
             badge = QLabel("⚠️ [Filtre Dışı]")
-            badge.setStyleSheet("color: #b78103; font-size: 11px; font-weight: bold; background: transparent;")
+            badge.setStyleSheet(f"color: {pal['sync_banner_text']}; font-size: 11px; font-weight: bold; background: transparent;")
             badge.setToolTip("Bu kayıt düzenleme sonrasında aktif filtre kriterini karşılamamaktadır.")
             l.addWidget(badge)
 
@@ -1021,10 +1036,10 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
         if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
             res = grid_panel._target_search_result
             if res.match_type == "Value":
-                lbl_val.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 1px 4px; border-radius: 2px;")
+                lbl_val.setStyleSheet(f"background-color: {pal['grid_search_bg']}; color: {pal['grid_search_text']}; padding: 1px 4px; border-radius: 2px;")
                 grid_panel._target_widget = lbl_val
             else:
-                lbl_elem.setStyleSheet("background-color: #fffacd; color: #1e1e1e; padding: 1px 4px; border-radius: 2px;")
+                lbl_elem.setStyleSheet(f"background-color: {pal['grid_search_bg']}; color: {pal['grid_search_text']}; padding: 1px 4px; border-radius: 2px;")
                 grid_panel._target_widget = lbl_elem
 
         return w
@@ -1034,28 +1049,28 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
     if grid_panel and grid_panel._target_search_result and node.lxml_element is grid_panel._target_search_result.element:
         if grid_panel._target_search_result.match_type == "Element":
             if node.is_expanded:
-                frame.header_widget.setStyleSheet("""
-                    QWidget#expandableHeader {
-                        background-color: #fffacd;
-                        border-bottom: 2px solid #e6b800;
+                frame.header_widget.setStyleSheet(f"""
+                    QWidget#expandableHeader {{
+                        background-color: {pal['grid_search_bg']};
+                        border-bottom: 2px solid {pal['grid_search_border']};
                         border-top-left-radius: 3px;
                         border-top-right-radius: 3px;
-                    }
+                    }}
                 """)
-                frame.setStyleSheet("""
-                    QFrame#expandableFrame {
-                        border: 2px solid #e6b800;
+                frame.setStyleSheet(f"""
+                    QFrame#expandableFrame {{
+                        border: 2px solid {pal['grid_search_border']};
                         border-radius: 3px;
-                        background-color: #ffffff;
-                    }
+                        background-color: {pal['grid_cell_bg']};
+                    }}
                 """)
             else:
-                frame.header_widget.setStyleSheet("""
-                    QWidget#expandableHeader {
-                        background-color: #fffacd;
-                        border: 2px solid #e6b800;
+                frame.header_widget.setStyleSheet(f"""
+                    QWidget#expandableHeader {{
+                        background-color: {pal['grid_search_bg']};
+                        border: 2px solid {pal['grid_search_border']};
                         border-radius: 3px;
-                    }
+                    }}
                 """)
             grid_panel._target_widget = frame.header_widget
     
@@ -1069,9 +1084,9 @@ def render_node(node: _GridNode, on_rebuild, grid_panel=None) -> QWidget:
             
             for row, ns_child in enumerate(xmlns_node.children):
                 lbl_pfx = QLabel(f"<b>{ns_child.element}</b>")
-                lbl_pfx.setStyleSheet("background: #f0f0f0; border: 1px solid #d0d0d0; padding: 4px; color: #555;")
+                lbl_pfx.setStyleSheet(f"background: {pal['grid_table_header']}; border: 1px solid {pal['border_default']}; padding: 4px; color: {pal['text_secondary']};")
                 lbl_uri = QLabel(ns_child.value)
-                lbl_uri.setStyleSheet("background: #ffffff; border: 1px solid #d0d0d0; border-left: none; padding: 4px; color: #333;")
+                lbl_uri.setStyleSheet(f"background: {pal['grid_cell_bg']}; border: 1px solid {pal['border_default']}; border-left: none; padding: 4px; color: {pal['text_primary']};")
                 lbl_uri.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 
                 ns_layout.addWidget(lbl_pfx, row, 0)
@@ -1434,6 +1449,7 @@ class XmlGridPanel(QWidget):
     document_modified = pyqtSignal()
     undo_available_changed = pyqtSignal(bool)
     redo_available_changed = pyqtSignal(bool)
+    filter_cleared = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1706,20 +1722,24 @@ class XmlGridPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        from GUI.theme_manager import ThemeManager
+        global _CURRENT_THEME
+        _CURRENT_THEME = ThemeManager().get_saved_theme()
+        pal = _get_grid_palette()
         # Main scroll area to contain the arbitrarily tall/wide grid
         # Add a filter status area at the top
         self.filter_status_widget = QWidget()
-        self.filter_status_widget.setStyleSheet("background-color: #fff3cd; border-bottom: 1px solid #ffe69c; padding: 4px;")
+        self.filter_status_widget.setStyleSheet(f"background-color: {pal['sync_banner_bg']}; border-bottom: 1px solid {pal['sync_banner_border']}; padding: 4px;")
         filter_layout = QHBoxLayout(self.filter_status_widget)
         filter_layout.setContentsMargins(6, 2, 6, 2)
         
         self.filter_status_label = QLabel("Filter: ")
-        self.filter_status_label.setStyleSheet("color: #856404; font-weight: bold; border: none;")
+        self.filter_status_label.setStyleSheet(f"color: {pal['sync_banner_text']}; font-weight: bold; border: none;")
         
         self.filter_clear_btn = QPushButton("Clear")
-        self.filter_clear_btn.setStyleSheet("color: #856404; font-weight: bold; padding: 2px 6px;")
+        self.filter_clear_btn.setStyleSheet(f"color: {pal['sync_banner_text']}; font-weight: bold; padding: 2px 6px;")
         self.filter_clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.filter_clear_btn.clicked.connect(self.clear_filter)
+        self.filter_clear_btn.clicked.connect(self._on_banner_clear_clicked)
         
         filter_layout.addWidget(self.filter_status_label)
         filter_layout.addStretch()
@@ -1731,10 +1751,10 @@ class XmlGridPanel(QWidget):
         
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("QScrollArea { border: none; background: #ffffff; }")
+        self.scroll_area.setStyleSheet(f"QScrollArea {{ border: none; background: {pal['grid_bg']}; }}")
 
         self.content_widget = QWidget()
-        self.content_widget.setStyleSheet("background: #ffffff;")
+        self.content_widget.setStyleSheet(f"background: {pal['grid_bg']};")
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(8, 8, 8, 8)
         self.content_layout.setSpacing(8)
@@ -1746,6 +1766,24 @@ class XmlGridPanel(QWidget):
         # Initial empty root
         self._demo_root = _GridNode("")
         self._rebuild()
+
+    def refresh_theme(self, theme_name: str):
+        """Refreshes Grid View styling and rebuilds display nodes with the target theme palette."""
+        global _CURRENT_THEME
+        _CURRENT_THEME = theme_name.lower()
+        pal = _get_grid_palette()
+        self.scroll_area.setStyleSheet(f"QScrollArea {{ border: none; background: {pal['grid_bg']}; }}")
+        self.content_widget.setStyleSheet(f"background: {pal['grid_bg']};")
+        self.filter_status_widget.setStyleSheet(f"background-color: {pal['sync_banner_bg']}; border-bottom: 1px solid {pal['sync_banner_border']}; padding: 4px;")
+        self.filter_status_label.setStyleSheet(f"color: {pal['sync_banner_text']}; font-weight: bold; border: none;")
+        self.filter_clear_btn.setStyleSheet(f"color: {pal['sync_banner_text']}; font-weight: bold; padding: 2px 6px;")
+        
+        v_val = self.scroll_area.verticalScrollBar().value()
+        h_val = self.scroll_area.horizontalScrollBar().value()
+        if self._demo_root:
+            self._rebuild()
+        self.scroll_area.verticalScrollBar().setValue(v_val)
+        self.scroll_area.horizontalScrollBar().setValue(h_val)
         
     def load_xml(self, filepath: str, xml_root=None):
         """Load XML from filepath and update the grid view."""
@@ -1943,6 +1981,11 @@ class XmlGridPanel(QWidget):
         self._demo_root = final_root
         self._rebuild()
 
+
+    def _on_banner_clear_clicked(self):
+        """Called when the clear button on the filter status banner is clicked."""
+        self.clear_filter()
+        self.filter_cleared.emit()
 
     def clear_filter(self):
         """Removes the filter and restores original view."""
