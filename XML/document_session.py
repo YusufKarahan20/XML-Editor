@@ -15,14 +15,37 @@ Manages the active in-memory XML document state for XML Analyzer:
 from __future__ import annotations
 
 import codecs
+import hashlib
 import io
+import json
+import logging
 import os
 import re
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from lxml import etree
+
+from XML.history_manager import (
+    HistoryManager,
+    DocumentLock,
+    SaveAsTransactionLock,
+    get_document_id,
+    HistoryLockError,
+    HistoryCorruptionError,
+    HistoryTransactionConflictError,
+)
+from XML.history_diff import compare_xml_documents
+from XML.history_models import DocumentMetadata, ChangeRecord, ChangeSet, PendingJournalRecord
+
+logger = logging.getLogger(__name__)
+
+
+class HistoryIntegrityError(Exception):
+    """Raised when document history metadata and physical content have diverged or cannot be reconciled."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -227,7 +250,7 @@ class XmlDocumentSession:
     of the loaded XML document.
     """
 
-    def __init__(self):
+    def __init__(self, history_manager: Optional[HistoryManager] = None):
         self.file_path: Optional[Path] = None
         self.raw_text_draft: str = ""
         self.last_saved_text: str = ""
@@ -241,6 +264,12 @@ class XmlDocumentSession:
         self.xml_version: Optional[str] = None
         self.xml_encoding: Optional[str] = None
         self.xml_standalone: Optional[bool] = None
+
+        # History Core Integration (Stage 2.1-B)
+        self.history_manager: HistoryManager = (
+            history_manager if history_manager is not None else HistoryManager()
+        )
+        self.last_recovery_results: list[dict[str, Any]] = []
 
     @property
     def syntax_error(self) -> Optional[SyntaxErrorInfo]:
@@ -303,6 +332,18 @@ class XmlDocumentSession:
         self.xml_version = new_version
         self.xml_encoding = new_encoding
         self.xml_standalone = new_standalone
+
+        # 6. History Core Recovery (Stage 2.1-B)
+        # Scan and finalize any pending journal records or Save As manifests.
+        # History errors or warnings MUST NOT block successful XML document loading.
+        doc_id = get_document_id(str(self.file_path))
+        try:
+            self.last_recovery_results = self.history_manager.recover_pending(
+                doc_id, current_file_path=str(self.file_path)
+            )
+        except Exception as rec_err:
+            logger.warning("History recovery warning for %s: %s", doc_id, rec_err)
+            self.last_recovery_results = [{"status": "ERROR", "error": str(rec_err)}]
 
         return self.dom_root
 
@@ -484,11 +525,11 @@ class XmlDocumentSession:
 
     def save_file(self, target_path: Optional[str | Path] = None) -> Path:
         """
-        Saves current XML text draft atomically to target_path or self.file_path.
+        Saves current XML text draft atomically to target_path or self.file_path with
+        complete History Core Stage 2.1-B transactional integrity.
+
         Validates draft validity, BOM, and XML declaration encoding before saving.
-        On success, atomically writes file, updates last_saved_text and file_path,
-        and returns the resolved destination Path.
-        On failure, preserves all session state and raises the exception.
+        Dispatches to either Normal Save or Save As / Initial Save based on destination.
         """
         if not self.is_draft_valid or self.dom_root is None:
             raise ValueError("Cannot save an invalid or empty XML draft.")
@@ -508,12 +549,228 @@ class XmlDocumentSession:
                     "Only UTF-8 and UTF-8 BOM encodings are supported."
                 )
 
-        # Atomic write
-        save_xml_atomic(dest_path, self.raw_text_draft, has_bom=self.has_bom)
+        # Determine operation type
+        is_save_as = (
+            target_path is not None
+            and self.file_path is not None
+            and dest_path != self.file_path.resolve()
+        )
+        is_overwrite_existing_from_new = (
+            self.file_path is None and dest_path.exists()
+        )
 
-        # Update saved baseline state
-        self.mark_as_saved(dest_path)
-        return dest_path
+        if is_save_as or is_overwrite_existing_from_new:
+            return self._execute_save_as_or_initial(dest_path, is_initial_save=(self.file_path is None))
+        else:
+            return self._execute_normal_save(dest_path)
+
+    def _execute_normal_save(self, dest_path: Path) -> Path:
+        """
+        Executes Normal Save (same file path) under a single continuous DocumentLock.
+        Enforces Origin Baseline, physical BOM byte hashing, causal gap defense,
+        and transaction isolation.
+        """
+        # Rule 1.1: If unchanged and file exists on disk, no-op return
+        if not self.is_dirty() and dest_path.exists():
+            return dest_path
+
+        doc_id = get_document_id(str(dest_path))
+        doc_dir = self.history_manager.get_document_directory(doc_id)
+
+        # Rule 2.3: Entire Normal Save runs under a single continuous DocumentLock
+        with DocumentLock(doc_dir):
+            # 1. Recovery
+            rec_results = self.history_manager.recover_pending(doc_id, current_file_path=str(dest_path))
+            self.last_recovery_results = rec_results
+            for res in rec_results:
+                status = res.get("status")
+                if status in ("CONFLICT", "TRANSACTION_ACTIVE_LOCKED", "QUARANTINED_CORRUPT"):
+                    raise HistoryIntegrityError(
+                        f"Normal save blocked by history conflict or lock: {status} ({res.get('summary', '')})"
+                    )
+
+            # 2. Metadata inspection and causal gap detection (Rule 2.4 & 2.5)
+            meta = self.history_manager.load_metadata(doc_id)
+            history_path = os.path.join(doc_dir, "history.jsonl")
+            has_history_records = os.path.exists(history_path) and os.path.getsize(history_path) > 0
+            dest_exists = dest_path.exists()
+
+            if meta is None and has_history_records:
+                # Metadata missing but history records exist -> reconstruct
+                meta = self._reconstruct_metadata_locked(doc_id, str(dest_path), history_path)
+
+            if meta is not None and dest_exists:
+                # Verify physical disk hash vs metadata last_saved_content_sha256
+                disk_bytes = dest_path.read_bytes()
+                disk_hash = hashlib.sha256(disk_bytes).hexdigest()
+                if meta.last_saved_content_sha256 and disk_hash != meta.last_saved_content_sha256:
+                    raise HistoryIntegrityError(
+                        f"Physical XML disk hash ({disk_hash[:8]}...) diverges from history metadata "
+                        f"({meta.last_saved_content_sha256[:8]}...). History chain is broken."
+                    )
+
+            # 3. Prepare bytes and hash (Rule 2.2)
+            raw_text_bytes = self.raw_text_draft.encode("utf-8")
+            expected_bytes = (codecs.BOM_UTF8 + raw_text_bytes) if self.has_bom else raw_text_bytes
+
+            # Check if this is a brand-new file on disk with no prior history (Origin Baseline)
+            if not dest_exists and (meta is None or not has_history_records):
+                # Rule 2.1: Initial Save - Origin Baseline:
+                # Do NOT create synthetic ELEMENT_INSERT ChangeSet.
+                # Write XML atomically, initialize metadata with initial hash, mark as saved.
+                save_xml_atomic(dest_path, self.raw_text_draft, has_bom=self.has_bom)
+                now_iso = datetime.now(timezone.utc).isoformat()
+                init_meta = DocumentMetadata(
+                    doc_id=doc_id,
+                    original_filename=dest_path.name,
+                    last_known_path=str(dest_path),
+                    created_at=now_iso,
+                    last_saved_at=now_iso,
+                    active_epoch=1,
+                    last_saved_content_sha256=hashlib.sha256(expected_bytes).hexdigest(),
+                )
+                self.history_manager.save_metadata(init_meta)
+                self.mark_as_saved(dest_path)
+                return dest_path
+
+            # If file already exists or history exists, calculate delta
+            old_text = self.last_saved_text or ""
+            if not old_text and dest_exists:
+                try:
+                    old_text = dest_path.read_text(encoding="utf-8-sig")
+                except Exception:
+                    old_text = ""
+
+            old_raw_bytes = old_text.encode("utf-8")
+            previous_bytes = (codecs.BOM_UTF8 + old_raw_bytes) if self.has_bom else old_raw_bytes
+
+            changes = compare_xml_documents(old_text, self.raw_text_draft, doc_id=doc_id)
+
+            prec = self.history_manager.prepare_pending(
+                doc_id=doc_id,
+                target_path=str(dest_path),
+                previous_content=previous_bytes,
+                expected_content=expected_bytes,
+                changes=changes,
+            )
+
+            # 4. Atomic XML write (under continuous DocumentLock!)
+            try:
+                save_xml_atomic(dest_path, self.raw_text_draft, has_bom=self.has_bom)
+            except Exception as write_err:
+                try:
+                    self.history_manager.abort_save(doc_id, prec.save_id)
+                except Exception as abort_err:
+                    logger.warning("Failed to abort pending save %s: %s", prec.save_id, abort_err)
+                raise write_err
+
+            # 5. Commit pending journal
+            try:
+                self.history_manager.commit_pending(
+                    doc_id=doc_id,
+                    save_id=prec.save_id,
+                    expected_target_path=str(dest_path)
+                )
+            except Exception as commit_err:
+                # XML is safe on disk; log warning, pending journal preserved for recovery
+                logger.warning("History commit deferred for save_id %s: %s", prec.save_id, commit_err)
+
+            self.mark_as_saved(dest_path)
+            return dest_path
+
+    def _reconstruct_metadata_locked(self, doc_id: str, target_path: str, history_path: str) -> DocumentMetadata:
+        """
+        Reconstructs missing DocumentMetadata from verified history.jsonl records.
+        """
+        last_sha = ""
+        try:
+            with open(history_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line_s = line.strip()
+                    if not line_s:
+                        continue
+                    try:
+                        record = json.loads(line_s)
+                        if record.get("expected_target_sha256"):
+                            last_sha = record["expected_target_sha256"]
+                    except Exception:
+                        continue
+        except Exception as e:
+            raise HistoryIntegrityError(f"Cannot reconstruct metadata; history journal read failed: {e}")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        meta = DocumentMetadata(
+            doc_id=doc_id,
+            original_filename=Path(target_path).name,
+            last_known_path=target_path,
+            created_at=now_iso,
+            last_saved_at=now_iso,
+            active_epoch=1,
+            last_saved_content_sha256=last_sha,
+        )
+        self.history_manager.save_metadata(meta)
+        return meta
+
+    def _execute_save_as_or_initial(self, dest_path: Path, is_initial_save: bool = False) -> Path:
+        """
+        Executes Save As or Initial Save using SaveAsTransactionLock and prepare_save_as_transaction.
+        """
+        target_doc_id = get_document_id(str(dest_path))
+
+        if is_initial_save:
+            source_doc_id = "__new_document__"
+            source_path = ""
+        else:
+            source_doc_id = get_document_id(str(self.file_path)) if self.file_path else "__new_document__"
+            source_path = str(self.file_path) if self.file_path else ""
+
+        # Inspect target on disk
+        dest_exists = dest_path.exists()
+        previous_bytes: Optional[bytes] = None
+        previous_text: str = ""
+        if dest_exists:
+            previous_bytes = dest_path.read_bytes()
+            previous_text = previous_bytes.decode("utf-8-sig")
+
+        # Hierarchical Locking: SaveAsTransactionLock -> DocumentLock
+        with self.history_manager.save_as_transaction_lock(target_doc_id):
+            if dest_exists and previous_text:
+                changes = compare_xml_documents(previous_text, self.raw_text_draft, doc_id=target_doc_id)
+            else:
+                changes = []
+
+            manifest, prec = self.history_manager.prepare_save_as_transaction(
+                source_doc_id=source_doc_id,
+                target_doc_id=target_doc_id,
+                target_path=str(dest_path),
+                source_path=source_path,
+                previous_target_exists=dest_exists,
+                previous_content=previous_bytes,
+                expected_content=self.raw_text_draft,
+                changes=changes,
+                has_bom=self.has_bom,
+            )
+
+            try:
+                save_xml_atomic(dest_path, self.raw_text_draft, has_bom=self.has_bom)
+            except Exception as write_err:
+                try:
+                    self.history_manager.abort_save_as_transaction(target_doc_id, manifest.save_id)
+                except Exception as abort_err:
+                    logger.warning("Failed to abort save as transaction %s: %s", manifest.save_id, abort_err)
+                raise write_err
+
+            try:
+                self.history_manager.commit_save_as_transaction(
+                    target_doc_id=target_doc_id,
+                    save_id=manifest.save_id,
+                    expected_target_path=str(dest_path)
+                )
+            except Exception as commit_err:
+                logger.warning("Save As commit deferred for %s: %s", manifest.save_id, commit_err)
+
+            self.mark_as_saved(dest_path)
+            return dest_path
 
     def mark_as_saved(self, target_path: Optional[str | Path] = None):
         """
@@ -709,3 +966,28 @@ class XmlDocumentSession:
         self.xml_version = None
         self.xml_encoding = None
         self.xml_standalone = None
+        self.last_recovery_results = []
+
+    def get_history_audit(self) -> Optional[Dict[str, Any]]:
+        """
+        Returns read-only history audit data for the currently loaded document.
+        Returns None if no document is loaded or document has no file_path.
+        """
+        if not self.file_path:
+            return None
+        doc_id = get_document_id(str(self.file_path))
+        return self.history_manager.get_history_audit(doc_id)
+
+    def delete_history_changeset(self, save_id: str) -> bool:
+        """Deletes a specific history record by save_id under DocumentLock."""
+        if not self.file_path:
+            return False
+        doc_id = get_document_id(str(self.file_path))
+        return self.history_manager.delete_changeset(doc_id, save_id)
+
+    def clear_all_history(self) -> bool:
+        """Completely clears all history records and re-anchors to current file baseline."""
+        if not self.file_path:
+            return False
+        doc_id = get_document_id(str(self.file_path))
+        return self.history_manager.clear_all_history(doc_id, current_file_path=str(self.file_path))

@@ -10,6 +10,7 @@ Assembles the full XML Analyzer interface:
 All QActions are wired as stubs so functionality can be connected later.
 """
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -22,8 +23,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QCloseEvent
 from PyQt6.QtCore import Qt, QSize, QSettings, QEvent, QObject
 from lxml import etree
-from XML.document_session import XmlDocumentSession
+from XML.document_session import XmlDocumentSession, HistoryIntegrityError
+from XML.history_manager import HistoryLockError
 from GUI.center_panel import CenterPanel
+from GUI.history_viewer import HistoryViewerDialog
 from GUI.icon_provider import IconProvider
 from GUI.theme_manager import ThemeManager, PALETTE
 from SEARCH.engine import search_xml
@@ -35,6 +38,8 @@ from FILTER.engine import apply_filter
 from CONVERTER.xml_to_json import ConversionConfig, xml_to_json
 from CONVERTER.heuristics import build_smart_array_detector
 from CONVERTER.soap import is_soap_envelope, is_service_payload, soap_to_json, build_soap_array_detector
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_path(filepath: str) -> str:
@@ -259,6 +264,8 @@ class MainWindow(QMainWindow):
                 slot=self._on_save_file, icon_name="save")
         _action("file_save_as", "Save As…",     "Ctrl+Shift+S", "Save file as…",
                 slot=self._on_save_file_as, icon_name="file-down")
+        _action("file_history", "History Viewer…", "Ctrl+H", "View document change history and audit trail",
+                slot=self._show_history_viewer, icon_name="history")
         _action("file_exit",    "Exit",         "Ctrl+Q",  "Quit application",
                 slot=self._on_exit, icon_name="log-out")
 
@@ -335,6 +342,7 @@ class MainWindow(QMainWindow):
         self._rebuild_recent_menu()
         self.file_menu.addAction(self._actions["file_save"])
         self.file_menu.addAction(self._actions["file_save_as"])
+        self.addAction(self._actions["file_history"])
         self.file_menu.addSeparator()
 
         # Theme submenu inside File menu
@@ -368,6 +376,7 @@ class MainWindow(QMainWindow):
         self.view_menu.addAction(self._actions["view_tree"])
         self.view_menu.addAction(self._actions["view_grid"])
         self.view_menu.addAction(self._actions["view_json"])
+        self.view_menu.addAction(self._actions["file_history"])
         self.view_menu.addSeparator()
         self.view_menu.addMenu(self.theme_menu)
 
@@ -433,6 +442,18 @@ class MainWindow(QMainWindow):
 
         self.convert_btn = _make_menu_btn("Convert", self.convert_menu, "Conversion operations", icon_name="arrow-right-left")
         self.header_toolbar.addWidget(self.convert_btn)
+
+        # ── History direct button ────────────────────────────────────
+        self.history_btn = QToolButton(self.header_toolbar)
+        self.history_btn.setText("History")
+        self.history_btn.setIcon(IconProvider.get_icon("history"))
+        self.history_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.history_btn.setIconSize(QSize(16, 16))
+        self.history_btn.setToolTip("View document change history and audit trail (Ctrl+H)")
+        self.history_btn.setStyleSheet(btn_style)
+        self.history_btn.clicked.connect(self._show_history_viewer)
+        self.history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header_toolbar.addWidget(self.history_btn)
 
         # ── Separator right after Convert ─────────────────────────────
         self.header_toolbar.addSeparator()
@@ -601,7 +622,32 @@ class MainWindow(QMainWindow):
             self._last_valid_xml_text = self.doc_session.raw_text_draft
             self._update_window_title()
             self.update_status(state=f"Kaydedildi: {saved_path.name}")
+            if hasattr(self, "_history_dialog") and self._history_dialog and self._history_dialog.isVisible():
+                try:
+                    self._history_dialog.reload()
+                except Exception:
+                    pass
             return True
+        except HistoryIntegrityError as e:
+            logger.warning("History integrity error during save: %s", e)
+            QMessageBox.warning(
+                self,
+                "Tarihçe Bütünlüğü Uyarısı",
+                f"Belgenin geçmiş kütüğünde tutarsızlık tespit edildi:\n{e}\n\n"
+                "Geçmiş zincirini korumak için kayıt durduruldu.\n"
+                "XML taslağınız korunmaktadır. Belgenizi 'Farklı Kaydet' (Save As) seçeneğiyle "
+                "yeni bir dosyaya kaydedebilirsiniz."
+            )
+            return False
+        except HistoryLockError as e:
+            logger.warning("History lock error during save: %s", e)
+            QMessageBox.warning(
+                self,
+                "Dosya Kilitli",
+                f"Belge geçmişi başka bir süreç tarafından kilitlenmiş:\n{e}\n\n"
+                "Lütfen diğer işlemin tamamlanmasını bekleyip tekrar deneyin."
+            )
+            return False
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -660,7 +706,31 @@ class MainWindow(QMainWindow):
             self._last_valid_xml_text = self.doc_session.raw_text_draft
             self._update_window_title()
             self.update_status(state=f"Farklı Kaydedildi: {saved_path.name}")
+            if hasattr(self, "_history_dialog") and self._history_dialog and self._history_dialog.isVisible():
+                try:
+                    self._history_dialog.refresh_document(self.doc_session)
+                except Exception:
+                    pass
             return True
+        except HistoryIntegrityError as e:
+            logger.warning("History integrity error during Save As: %s", e)
+            QMessageBox.warning(
+                self,
+                "Tarihçe Bütünlüğü Uyarısı",
+                f"Hedef belgenin geçmiş kütüğünde tutarsızlık tespit edildi:\n{e}\n\n"
+                "Geçmiş zincirini korumak için farklı kaydetme durduruldu.\n"
+                "Mevcut XML taslağınız korunmaktadır. Başka bir dosya adı seçerek tekrar deneyebilirsiniz."
+            )
+            return False
+        except HistoryLockError as e:
+            logger.warning("History lock error during Save As: %s", e)
+            QMessageBox.warning(
+                self,
+                "Dosya Kilitli",
+                f"Hedef belge geçmişi başka bir süreç tarafından kilitlenmiş:\n{e}\n\n"
+                "Lütfen diğer işlemin tamamlanmasını bekleyip tekrar deneyin."
+            )
+            return False
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -668,6 +738,25 @@ class MainWindow(QMainWindow):
                 f"Dosya kaydedilirken bir hata oluştu:\n{e}"
             )
             return False
+
+    def _show_history_viewer(self):
+        """Opens or activates the read-only History Viewer dialog for the active document."""
+        if not self.doc_session.file_path:
+            QMessageBox.information(
+                self,
+                "Geçmiş Bulunamadı",
+                "Geçmiş kayıtlarını görüntülemek için önce diske kaydedilmiş bir XML belgesi açmalısınız.\n\n"
+                "Henüz kaydedilmemiş veya yeni oluşturulmuş belgelerin geçmiş kaydı bulunmamaktadır."
+            )
+            return
+
+        if hasattr(self, "_history_dialog") and self._history_dialog and self._history_dialog.isVisible():
+            self._history_dialog.reload()
+            self._history_dialog.raise_()
+            self._history_dialog.activateWindow()
+        else:
+            self._history_dialog = HistoryViewerDialog(self.doc_session, theme_manager=self.theme_manager, parent=self)
+            self._history_dialog.show()
 
     DEFAULT_NEW_DOCUMENT_XML = '<?xml version="1.0" encoding="UTF-8"?>\n<root>\n</root>\n'
 
@@ -754,6 +843,13 @@ class MainWindow(QMainWindow):
         self.update_status(state="Yeni Belge Oluşturuldu", nodes=node_count, matches=0)
         self._update_window_title()
         self._update_undo_redo_actions()
+
+        if hasattr(self, "_history_dialog") and self._history_dialog and self._history_dialog.isVisible():
+            try:
+                self._history_dialog.refresh_document(self.doc_session)
+            except Exception:
+                pass
+
         return True
 
     def _load_recent_files(self):
@@ -912,6 +1008,86 @@ class MainWindow(QMainWindow):
                 self._drop_filter = None
             event.accept()
 
+    def _handle_load_recovery_feedback(self, filepath: str) -> None:
+        """
+        Evaluates recovery results from the document session after opening a file.
+        Provides user feedback via Status Bar for harmless recoveries (COMMITTED, ABORTED)
+        or a single QMessageBox.warning summary dialog for conflicts, corruption, quarantines,
+        errors, or unknown statuses.
+        """
+        results = list(self.doc_session.last_recovery_results or [])
+        # Clear results immediately to prevent repeated notifications on view changes or focus
+        self.doc_session.last_recovery_results = []
+
+        if not results:
+            return
+
+        status_descriptions = {
+            "COMMITTED": "Bekleyen geçmiş kaydı başarıyla işlendi.",
+            "ABORTED": "Tamamlanmamış geçmiş işlemi güvenli şekilde iptal edildi.",
+            "CONFLICT": "Çakışma tespit edildi; önceki tamamlanmamış işlem karantinaya alındı.",
+            "QUARANTINED": "Bekleyen geçmiş kaydı disk içeriğiyle eşleşmediği için karantinaya alındı.",
+            "QUARANTINED_CORRUPT": "Bozuk bekleyen geçmiş kütüğü tespit edildi ve karantinaya taşındı.",
+            "QUARANTINED_ARCHIVED_EPOCH": "Arşivlenmiş bir döneme ait bekleyen kayıt karantinaya alındı.",
+            "TRANSACTION_ACTIVE_LOCKED": "Belge geçmişi üzerinde kilitli veya devam eden başka bir işlem tespit edildi.",
+            "ERROR": "Geçmiş kurtarma sırasında hata oluştu.",
+        }
+
+        info_statuses = {"COMMITTED", "ABORTED"}
+        warning_statuses = {
+            "CONFLICT",
+            "QUARANTINED",
+            "QUARANTINED_CORRUPT",
+            "QUARANTINED_ARCHIVED_EPOCH",
+            "TRANSACTION_ACTIVE_LOCKED",
+            "ERROR",
+        }
+
+        warning_items: list[str] = []
+        info_items: list[str] = []
+
+        for item in results:
+            if isinstance(item, dict):
+                raw_status = item.get("status")
+                err_detail = item.get("error") or item.get("summary") or ""
+                if not err_detail and "save_id" in item:
+                    err_detail = f"Kayıt No: {item['save_id']}"
+            else:
+                raw_status = str(item)
+                err_detail = ""
+
+            status_str = str(raw_status).strip().upper() if raw_status else "UNKNOWN"
+
+            if status_str in info_statuses:
+                desc = status_descriptions.get(status_str, status_str)
+                info_items.append(f"{status_str}: {desc}")
+            elif status_str in warning_statuses:
+                desc = status_descriptions.get(status_str, status_str)
+                detail_suffix = f" ({err_detail})" if err_detail else ""
+                warning_items.append(f"• [{status_str}] {desc}{detail_suffix}")
+            else:
+                # Bilinmeyen durumlar sessizce başarılı kabul edilmemeli; güvenli şekilde ele alınmalı ve loglanmalı
+                logger.warning("Bilinmeyen geçmiş kurtarma durumu tespit edildi: %s (Kayıt: %s)", status_str, item)
+                detail_suffix = f" ({err_detail})" if err_detail else ""
+                warning_items.append(f"• [BİLİNMEYEN DURUM: {status_str}] Güvenlik nedeniyle incelenmesi gerekebilir.{detail_suffix}")
+
+        filename = Path(filepath).name
+
+        if warning_items:
+            warning_details = "\n".join(warning_items)
+            msg_text = (
+                f"'{filename}' belgesi başarıyla açıldı, ancak belge geçmişi (History) kontrolünde "
+                f"aşağıdaki durumlar tespit edildi:\n\n"
+                f"{warning_details}\n\n"
+                "Mevcut XML içeriğiniz korunmuştur. Ancak geçmiş bütünlüğünü güvenceye almak için "
+                "belgenizi 'Farklı Kaydet' (Save As) seçeneğiyle yeni bir dosyaya kaydetmeniz önerilir."
+            )
+            QMessageBox.warning(self, "Geçmiş Bütünlüğü Uyarısı", msg_text)
+            self.statusBar().showMessage(f"Açıldı: {filename} (Geçmiş uyarısı mevcut)", 5000)
+        elif info_items:
+            status_text = ", ".join(sorted(set(item.split(":")[0] for item in info_items)))
+            self.statusBar().showMessage(f"Açıldı: {filename} (Geçmiş kurtarıldı: {status_text})", 5000)
+
     def load_xml_file(self, filepath: str) -> bool:
         """Validates and loads the XML file into all views."""
         # 1. Validate and load via session atomically
@@ -955,6 +1131,20 @@ class MainWindow(QMainWindow):
 
             self.update_status(state=f"Opened: {filename}", nodes=node_count, matches=0)
             self._update_window_title()
+
+            # Handle History recovery feedback after views and status are updated
+            try:
+                self._handle_load_recovery_feedback(filepath)
+            except Exception as rec_err:
+                logger.warning("Error evaluating recovery feedback for %s: %s", filepath, rec_err)
+
+            # If History Viewer is open, refresh it with the newly loaded document
+            if hasattr(self, "_history_dialog") and self._history_dialog and self._history_dialog.isVisible():
+                try:
+                    self._history_dialog.refresh_document(self.doc_session)
+                except Exception as h_err:
+                    logger.warning("Error refreshing history dialog on file load: %s", h_err)
+
             return True
         except Exception as e:
             QMessageBox.warning(
@@ -1493,7 +1683,8 @@ class MainWindow(QMainWindow):
 
         btn_qss = self._get_menu_btn_style(theme_name)
         for b in (getattr(self, "file_btn", None), getattr(self, "edit_btn", None),
-                  getattr(self, "filter_btn", None), getattr(self, "convert_btn", None)):
+                  getattr(self, "filter_btn", None), getattr(self, "convert_btn", None),
+                  getattr(self, "history_btn", None)):
             if b:
                 b.setStyleSheet(btn_qss)
 
@@ -1511,6 +1702,7 @@ class MainWindow(QMainWindow):
             "file_open": "folder-open",
             "file_save": "save",
             "file_save_as": "file-down",
+            "file_history": "history",
             "file_exit": "log-out",
             "edit_undo": "undo-2",
             "edit_redo": "redo-2",
@@ -1544,6 +1736,8 @@ class MainWindow(QMainWindow):
             self.filter_btn.setIcon(IconProvider.get_icon("filter"))
         if hasattr(self, "convert_btn") and self.convert_btn:
             self.convert_btn.setIcon(IconProvider.get_icon("arrow-right-left"))
+        if hasattr(self, "history_btn") and self.history_btn:
+            self.history_btn.setIcon(IconProvider.get_icon("history"))
 
         # 4. Child panels
         if hasattr(self, "search_panel") and hasattr(self.search_panel, "refresh_theme"):

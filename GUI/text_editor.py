@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QWidget, QPlainTextEdit, QTextEdit, QHBoxLayout
 )
 from PyQt6.QtGui import (
-    QPainter, QColor, QTextFormat, QFont, QSyntaxHighlighter, QTextCharFormat, QTextCursor
+    QPainter, QColor, QPen, QTextFormat, QFont, QSyntaxHighlighter, QTextCharFormat, QTextCursor
 )
 from PyQt6.QtCore import Qt, QRect, QSize, QTimer, pyqtSignal
 
@@ -201,8 +201,9 @@ class XmlTextEditor(QPlainTextEdit):
         self._gutter_bg = QColor("#f0f0f0")
         self._gutter_border = QColor("#d0d0d0")
         self._gutter_text = QColor("#888888")
-        self._fold_border = QColor("#666666")
+        self._fold_border = QColor("#8b949e")
         self._fold_bg = QColor("#ffffff")
+        self._fold_fg = QColor("#1e1e24")
         self._current_line_bg = QColor("#fffde7")
         self._search_match_bg = QColor("#ffe082")
         self._error_line_bg = QColor("#fce4ec")
@@ -300,20 +301,26 @@ class XmlTextEditor(QPlainTextEdit):
                 # Draw Fold Icons
                 node = self.line_to_node.get(blockNumber)
                 if node:
-                    icon_size = 9
-                    x = self.line_number_area.width() - 17
+                    icon_size = 11
+                    x = self.line_number_area.width() - 19
                     y = top + (fm.height() - icon_size) // 2
-                    
-                    painter.setPen(self._fold_border)
+                    half = icon_size // 2
+
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                    painter.setPen(QPen(self._fold_border, 1.2))
                     painter.setBrush(self._fold_bg)
-                    painter.drawRect(x, y, icon_size, icon_size)
-                    
+                    painter.drawRoundedRect(x, y, icon_size, icon_size, 2, 2)
+
+                    # High-contrast inner minus / plus symbol
+                    painter.setPen(QPen(self._fold_fg, 1.6))
                     # Horizontal line for minus
-                    painter.drawLine(x + 2, y + icon_size//2, x + icon_size - 2, y + icon_size//2)
-                    
-                    # Vertical line for plus
+                    painter.drawLine(x + 3, y + half, x + icon_size - 3, y + half)
+
+                    # Vertical line for plus (when folded)
                     if node.is_folded:
-                        painter.drawLine(x + icon_size//2, y + 2, x + icon_size//2, y + icon_size - 2)
+                        painter.drawLine(x + half, y + 3, x + half, y + icon_size - 3)
+
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
                         
             block = block.next()
             top = bottom
@@ -330,8 +337,14 @@ class XmlTextEditor(QPlainTextEdit):
         self._gutter_bg = QColor(pal["editor_gutter_bg"])
         self._gutter_border = QColor(pal["editor_gutter_border"])
         self._gutter_text = QColor(pal["editor_gutter_text"])
-        self._fold_border = QColor(pal["border_muted"] if self._current_theme == "dark" else "#666666")
-        self._fold_bg = QColor(pal["panel_base"] if self._current_theme == "dark" else "#ffffff")
+        if self._current_theme == "dark":
+            self._fold_border = QColor("#7982a9")
+            self._fold_bg = QColor("#282a36")
+            self._fold_fg = QColor("#ffffff")
+        else:
+            self._fold_border = QColor("#8b949e")
+            self._fold_bg = QColor("#ffffff")
+            self._fold_fg = QColor("#1e1e24")
         self._current_line_bg = QColor(pal["editor_current_line"])
         self._search_match_bg = QColor(pal["editor_search_match"])
         self._error_line_bg = QColor(pal["val_bg"])
